@@ -18,7 +18,8 @@
             --shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
             --toast-bg: #1f2937;
             --toast-text: #ffffff;
-            --sidebar-bg: #f9faf  --sidebar-text: #111827;
+            --sidebar-bg: #f9fafb;
+            --sidebar-text: #111827;
         }
 
         [data-theme="dark"] {
@@ -62,7 +63,7 @@
         }
 
         .sidebar {
-            width: 300px;
+            width: 350px;
             background: var(--sidebar-bg);
             color: var(--sidebar-text);
             padding: 20px;
@@ -95,7 +96,7 @@
             cursor: pointer;
         }
 
-        .sidebar input {
+        .sidebar input, .sidebar select {
             width: 100%;
             padding: 10px;
             border: 2px solid var(--border-color);
@@ -105,21 +106,43 @@
             font-size: 0.9rem;
         }
 
-        .session-list {
+        .session-list, .style-list {
             flex: 1;
             overflow-y: auto;
         }
 
-        .session-item {
+        .session-item, .style-item {
             padding: 10px;
             border-radius: 8px;
             cursor: pointer;
             transition: background 0.3s ease;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
         }
 
-        .session-item:hover {
+        .session-item:hover, .style-item:hover {
             background: var(--accent-color);
             color: white;
+        }
+
+        .style-item button {
+            background: none;
+            border: none;
+            color: var(--text-color);
+            cursor: pointer;
+        }
+
+        .upload-area {
+            border: 2px dashed var(--border-color);
+            padding: 20px;
+            text-align: center;
+            border-radius: 8px;
+            cursor: pointer;
+        }
+
+        .upload-area.dragover {
+            background: var(--ai-bg);
         }
 
         .main {
@@ -468,11 +491,44 @@
     <div class="container">
         <div class="sidebar" id="sidebar">
             <div class="sidebar-header">
-                <h2>Sesiones</h2>
+                <h2>Opciones</h2>
                 <button class="sidebar-toggle" onclick="toggleSidebar()">✕</button>
             </div>
             <input type="text" id="searchInput" placeholder="Buscar en historial..." oninput="searchSessions()">
+            <h3>Sesiones</h3>
             <div class="session-list" id="sessionList"></div>
+            <h3>Configuración de Documento</h3>
+            <select id="docType">
+                <option value="general">General</option>
+                <option value="formal_letter">Carta Formal</option>
+                <option value="report">Informe</option>
+                <option value="email">Correo Electrónico</option>
+                <option value="contract">Contrato</option>
+                <option value="resume">Currículum</option>
+            </select>
+            <select id="tone">
+                <option value="neutral">Neutral</option>
+                <option value="formal">Formal</option>
+                <option value="informal">Informal</option>
+                <option value="technical">Técnico</option>
+            </select>
+            <select id="length">
+                <option value="short">Corto</option>
+                <option value="medium">Medio</option>
+                <option value="long">Largo</option>
+            </select>
+            <select id="language">
+                <option value="es">Español</option>
+                <option value="en">Inglés</option>
+                <option value="fr">Francés</option>
+            </select>
+            <h3>Perfiles de Estilo</h3>
+            <div class="style-list" id="styleList"></div>
+            <h3>Subir Documento</h3>
+            <div class="upload-area" id="uploadArea">
+                Arrastra o haz clic para subir un PDF/TXT
+                <input type="file" id="fileInput" accept=".pdf,.txt" style="display: none;">
+            </div>
         </div>
         <div class="main">
             <div class="header">
@@ -516,8 +572,11 @@
         const promptInput = document.getElementById('prompt');
         const pdfModal = document.getElementById('pdfModal');
         const sessionList = document.getElementById('sessionList');
+        const styleList = document.getElementById('styleList');
         const searchInput = document.getElementById('searchInput');
         const progressBar = document.getElementById('progressBar');
+        const uploadArea = document.getElementById('uploadArea');
+        const fileInput = document.getElementById('fileInput');
         let currentPDFBlob = null;
         let currentSessionId = 'default';
         let sessions = JSON.parse(localStorage.getItem('sessions') || '{}');
@@ -534,6 +593,44 @@
                 item.onclick = () => loadSession(id);
                 sessionList.appendChild(item);
             });
+        }
+
+        // Cargar perfiles de estilo
+        async function loadStyleProfiles() {
+            try {
+                const response = await fetch('/style_profiles');
+                const profiles = await response.json();
+                styleList.innerHTML = '';
+                Object.keys(profiles).forEach(id => {
+                    const profile = profiles[id];
+                    const item = document.createElement('div');
+                    item.className = 'style-item';
+                    item.innerHTML = `
+                        ${profile.font_name} (${profile.tone})
+                        <button onclick="deleteStyleProfile('${id}')">🗑️</button>
+                    `;
+                    item.onclick = (e) => {
+                        if (e.target.tagName !== 'BUTTON') {
+                            document.getElementById('styleProfile').value = id;
+                        }
+                    };
+                    styleList.appendChild(item);
+                });
+            } catch (error) {
+                showToast(`Error al cargar perfiles: ${error.message}`, 'error');
+            }
+        }
+
+        // Eliminar perfil de estilo
+        async function deleteStyleProfile(id) {
+            try {
+                const response = await fetch(`/style_profiles/${id}`, { method: 'DELETE' });
+                const data = await response.json();
+                showToast(data.message);
+                loadStyleProfiles();
+            } catch (error) {
+                showToast(`Error: ${error.message}`, 'error');
+            }
         }
 
         // Cargar sesión específica
@@ -655,10 +752,24 @@
             progressBar.style.width = '30%';
 
             try {
+                const docType = document.getElementById('docType').value;
+                const tone = document.getElementById('tone').value;
+                const length = document.getElementById('length').value;
+                const language = document.getElementById('language').value;
+                const styleProfile = document.getElementById('styleProfile')?.value || null;
+
                 const response = await fetch('/generate', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ prompt, session_id: currentSessionId })
+                    body: JSON.stringify({ 
+                        prompt, 
+                        session_id: currentSessionId, 
+                        doc_type: docType, 
+                        tone, 
+                        length, 
+                        language, 
+                        style_profile_id: styleProfile 
+                    })
                 });
                 progressBar.style.width = '100%';
                 setTimeout(() => progressBar.style.width = '0', 300);
@@ -691,11 +802,12 @@
         // Vista previa de PDF
         async function previewPDF(button) {
             const messageText = button.parentElement.previousElementSibling.textContent;
+            const styleProfile = document.getElementById('styleProfile')?.value || null;
             try {
                 const response = await fetch('/generate_pdf', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ content: messageText })
+                    body: JSON.stringify({ content: messageText, style_profile_id: styleProfile })
                 });
                 if (!response.ok) {
                     const data = await response.json();
@@ -780,19 +892,50 @@
             promptInput.focus();
         }
 
+        // Manejo de subida de archivos
+        uploadArea.addEventListener('click', () => fileInput.click());
+        uploadArea.addEventListener('dragover', e => {
+            e.preventDefault();
+            uploadArea.classList.add('dragover');
+        });
+        uploadArea.addEventListener('dragleave', () => uploadArea.classList.remove('dragover'));
+        uploadArea.addEventListener('drop', e => {
+            e.preventDefault();
+            uploadArea.classList.remove('dragover');
+            const file = e.dataTransfer.files[0];
+            uploadFile(file);
+        });
+        fileInput.addEventListener('change', () => {
+            if (fileInput.files[0]) uploadFile(fileInput.files[0]);
+        });
+
+        async function uploadFile(file) {
+            const formData = new FormData();
+            formData.append('file', file);
+            try {
+                progressBar.style.width = '30%';
+                const response = await fetch('/analyze_document', {
+                    method: 'POST',
+                    body: formData
+                });
+                progressBar.style.width = '100%';
+                setTimeout(() => progressBar.style.width = '0', 300);
+                const data = await response.json();
+                if (data.error) {
+                    showToast(`Error: ${data.error}`, 'error');
+                } else {
+                    showToast('Documento analizado');
+                    loadStyleProfiles();
+                }
+            } catch (error) {
+                showToast(`Error: ${error.message}`, 'error');
+            }
+        }
+
         // Ajustar altura de textarea
         promptInput.addEventListener('input', () => {
             promptInput.style.height = '60px';
             promptInput.style.height = `${Math.min(promptInput.scrollHeight, 200)}px`;
-        });
-
-        // Arrastrar y soltar
-        promptInput.addEventListener('dragover', e => e.preventDefault());
-        promptInput.addEventListener('drop', e => {
-            e.preventDefault();
-            const text = e.dataTransfer.getData('text/plain');
-            promptInput.value = text;
-            promptInput.dispatchEvent(new Event('input'));
         });
 
         // Atajos de teclado
@@ -816,9 +959,16 @@
             }
         });
 
-        // Cargar sesiones al iniciar
+        // Cargar sesiones y perfiles al iniciar
         loadSessions();
+        loadStyleProfiles();
         loadSession(currentSessionId);
+
+        // Agregar select para perfiles de estilo
+        const styleSelect = document.createElement('select');
+        styleSelect.id = 'styleProfile';
+        styleSelect.innerHTML = '<option value="">Ninguno</option>';
+        document.querySelector('.sidebar').insertBefore(styleSelect, document.getElementById('styleList'));
     </script>
 </body>
 </html>
