@@ -1078,15 +1078,24 @@
                         includes_css: includesCss
                     })
                 });
+
                 if (!response.ok) {
                     const data = await response.json();
-                    showToast(`Error: ${data.error}`, 'error');
+                    showToast(`Error del servidor: ${data.error || 'Respuesta no válida'}`, 'error');
                     return;
                 }
+
                 previewContent.innerHTML = '';
+
                 if (contentType === 'html') {
-                    const data = await response.json();
                     if (includesCss) {
+                        // Para HTML con CSS, esperamos una respuesta JSON con preview_id
+                        const data = await response.json();
+                        if (!data.preview_id) {
+                            showToast('Error: No se recibió un preview_id válido', 'error');
+                            return;
+                        }
+
                         modalContent.classList.remove('html-only');
                         const iframe = document.createElement('iframe');
                         iframe.src = `/preview_html/${data.preview_id}`;
@@ -1094,9 +1103,13 @@
                         iframe.height = '70vh';
                         iframe.style.border = 'none';
                         iframe.style.background = '#fff';
+                        iframe.onerror = () => {
+                            showToast('Error al cargar la vista previa de la página web', 'error');
+                        };
                         previewContent.appendChild(iframe);
                         currentContentType = 'html';
                     } else {
+                        // Para HTML sin CSS, mostramos el código crudo
                         modalContent.classList.add('html-only');
                         const pre = document.createElement('pre');
                         pre.textContent = messageText;
@@ -1104,6 +1117,7 @@
                         currentContentType = 'html';
                     }
                 } else {
+                    // Para otros tipos (como PDF)
                     currentContentBlob = await response.blob();
                     const url = window.URL.createObjectURL(currentContentBlob);
                     const iframe = document.createElement('iframe');
@@ -1116,7 +1130,7 @@
                 }
                 previewModal.style.display = 'flex';
             } catch (error) {
-                showToast(`Error: ${error.message}`, 'error');
+                showToast(`Error al generar la vista previa: ${error.message}`, 'error');
             }
         }
 
