@@ -1,0 +1,22 @@
+# Archivos de entorno
+.env
+
+# Archivos de Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Entornos virtuales
+venv/
+env/
+.venv/
+
+# Archivos de sistema
+.DS_Store
+Thumbs.db
+
+# Archivos de dependencias
+*.egg-info/
+dist/
+build/
