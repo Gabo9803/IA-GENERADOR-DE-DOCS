@@ -501,10 +501,11 @@
             background: var(--container-bg);
             border-radius: 16px;
             padding: 25px;
-            max-width: 800px;
-            width: 90%;
+            max-width: 90vw;
             max-height: 90vh;
-            overflow-y: auto;
+            width: auto;
+            height: auto;
+            overflow: hidden;
             position: relative;
             backdrop-filter: blur(10px);
             -webkit-backdrop-filter: blur(10px);
@@ -514,6 +515,32 @@
             font-size: 1.5rem;
             margin-bottom: 20px;
             color: var(--text-color);
+        }
+
+        .modal-content iframe {
+            width: 100%;
+            height: 70vh;
+            border: none;
+            background: #fff;
+        }
+
+        .modal-content.html-only {
+            background: #fff;
+            padding: 15px;
+        }
+
+        .modal-content.html-only pre {
+            white-space: pre-wrap;
+            word-wrap: break-word;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 1rem;
+            color: #000;
+            margin: 0;
+            padding: 10px;
+            background: #f4f4f4;
+            border-radius: 8px;
+            max-height: 70vh;
+            overflow-y: auto;
         }
 
         .modal-close {
@@ -529,6 +556,13 @@
 
         .modal-close:hover {
             color: var(--accent-color);
+        }
+
+        .modal-actions {
+            margin-top: 20px;
+            display: flex;
+            justify-content: flex-end;
+            gap: 15px;
         }
 
         .progress-bar {
@@ -592,7 +626,7 @@
                 padding: 12px 18px;
             }
 
-            .textarea {
+            textarea {
                 min-height: 50px;
                 font-size: 0.95rem;
             }
@@ -600,6 +634,15 @@
             button.send {
                 padding: 12px 20px;
                 font-size: 0.95rem;
+            }
+
+            .modal-content {
+                width: 95vw;
+                height: auto;
+            }
+
+            .modal-content iframe {
+                height: 60vh;
             }
         }
     </style>
@@ -682,17 +725,18 @@
             <button class="modal-close" onclick="closeModal()">✕</button>
             <h2>Vista Previa</h2>
             <div id="previewContent"></div>
-            <button class="send" onclick="downloadCurrentContent()">Descargar</button>
+            <div class="modal-actions">
+                <button class="send" onclick="downloadCurrentContent()">Descargar</button>
+            </div>
         </div>
     </div>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script>
         // Configurar opciones de marked.js para manejar mejor el Markdown
         marked.setOptions({
-            breaks: true, // Permitir saltos de línea simples
-            gfm: true, // Habilitar GitHub Flavored Markdown
+            breaks: true,
+            gfm: true,
             highlight: function(code, lang) {
-                // Opcional: Añadir resaltado de sintaxis si usas una librería como highlight.js
                 return code;
             }
         });
@@ -700,6 +744,8 @@
         const chatArea = document.getElementById('chatArea');
         const promptInput = document.getElementById('prompt');
         const previewModal = document.getElementById('previewModal');
+        const previewContent = document.getElementById('previewContent');
+        const modalContent = document.querySelector('.modal-content');
         const sessionList = document.getElementById('sessionList');
         const styleList = document.getElementById('styleList');
         const searchInput = document.getElementById('searchInput');
@@ -719,6 +765,7 @@
             { prompt: 'Redacta un informe técnico', description: 'Crea un informe detallado con estructura técnica y datos.' },
             { prompt: 'Crea un correo profesional', description: 'Escribe un correo formal para un entorno laboral.' },
             { prompt: 'Diseña una página web sencilla', description: 'Genera código HTML para una página web responsiva.' },
+            { prompt: 'Diseña una página web con CSS', description: 'Genera una página web con HTML y CSS profesional.' },
             { prompt: 'Explica qué es la inteligencia artificial', description: 'Proporciona una explicación estructurada sobre IA.' }
         ];
 
@@ -801,7 +848,7 @@
         function loadSession(id) {
             currentSessionId = id;
             chatArea.innerHTML = '';
-            (sessions[id].messages || []).forEach(msg => addMessage(msg.content, msg.isUser, msg.contentType || 'pdf', false));
+            (sessions[id].messages || []).forEach(msg => addMessage(msg.content, msg.isUser, msg.contentType || 'pdf', false, msg.includesCss || false));
             toggleSidebar();
             showToast('Sesión cargada');
             updateSuggestions();
@@ -864,7 +911,7 @@
                     prompt,
                     description: 'Basado en tu historial reciente.'
                 }))
-            ].slice(0, 5); // Limitar a 5 sugerencias
+            ].slice(0, 5);
 
             suggestions.forEach(({ prompt, description }) => {
                 const suggestion = document.createElement('div');
@@ -886,14 +933,13 @@
         }
 
         // Agregar mensaje
-        function addMessage(content, isUser = false, contentType = 'pdf', save = true) {
+        function addMessage(content, isUser = false, contentType = 'pdf', save = true, includesCss = false) {
             const messageDiv = document.createElement('div');
             messageDiv.className = isUser ? 'message user-message' : 'message ai-message';
             if (isUser) {
                 messageDiv.textContent = content;
                 messageDiv.onclick = () => editMessage(messageDiv);
             } else {
-                // Escapar el contenido para evitar inyecciones y luego parsear como Markdown
                 const escapedContent = content
                     .replace(/&/g, '&')
                     .replace(/</g, '<')
@@ -903,16 +949,15 @@
                     <div class="ai-message-content">${renderedContent}</div>
                     <div class="message-buttons">
                         <button class="copy-button" onclick="copyMessage(this)" title="Copiar">📋</button>
-                        <button class="preview-button" onclick="previewContent(this, '${contentType}')" title="Vista previa">📄</button>
+                        <button class="preview-button" onclick="showPreviewContent(this, '${contentType}', ${includesCss})" title="Vista previa">📄</button>
                         <button class="reply-button" onclick="replyToMessage(this)" title="Responder">↩️</button>
                     </div>`;
             }
             chatArea.appendChild(messageDiv);
-            // Forzar el scroll al último mensaje
             chatArea.scrollTo({ top: chatArea.scrollHeight, behavior: 'smooth' });
             if (save) {
                 sessions[currentSessionId] = sessions[currentSessionId] || { name: `Sesión ${currentSessionId}`, messages: [] };
-                sessions[currentSessionId].messages.push({ content, isUser, contentType });
+                sessions[currentSessionId].messages.push({ content, isUser, contentType, includesCss });
                 saveSessions();
             }
         }
@@ -967,7 +1012,6 @@
                 const language = document.getElementById('language').value;
                 const styleProfile = document.getElementById('styleProfile').value || null;
 
-                // Preparar historial de mensajes
                 const messageHistory = (sessions[currentSessionId]?.messages || []).map(msg => ({
                     role: msg.isUser ? 'user' : 'assistant',
                     content: msg.content
@@ -995,7 +1039,7 @@
                     addMessage(`Error: ${data.error}`);
                     offlineQueue.push(prompt);
                 } else {
-                    addMessage(data.document, false, data.content_type);
+                    addMessage(data.document, false, data.content_type, true, data.includes_css);
                     offlineQueue = offlineQueue.filter(p => p !== prompt);
                     updateSuggestions();
                 }
@@ -1020,7 +1064,7 @@
         }
 
         // Vista previa de contenido
-        async function previewContent(button, contentType) {
+        async function showPreviewContent(button, contentType, includesCss) {
             const messageText = button.parentElement.previousElementSibling.innerText;
             const styleProfile = document.getElementById('styleProfile').value || null;
             try {
@@ -1030,7 +1074,8 @@
                     body: JSON.stringify({ 
                         content: messageText, 
                         content_type: contentType,
-                        style_profile_id: styleProfile 
+                        style_profile_id: styleProfile,
+                        includes_css: includesCss
                     })
                 });
                 if (!response.ok) {
@@ -1038,15 +1083,35 @@
                     showToast(`Error: ${data.error}`, 'error');
                     return;
                 }
-                const previewContent = document.getElementById('previewContent');
+                previewContent.innerHTML = '';
                 if (contentType === 'html') {
                     const data = await response.json();
-                    previewContent.innerHTML = `<iframe src="/preview_html/${data.preview_id}" width="100%" height="500px"></iframe>`;
-                    currentContentType = 'html';
+                    if (includesCss) {
+                        modalContent.classList.remove('html-only');
+                        const iframe = document.createElement('iframe');
+                        iframe.src = `/preview_html/${data.preview_id}`;
+                        iframe.width = '100%';
+                        iframe.height = '70vh';
+                        iframe.style.border = 'none';
+                        iframe.style.background = '#fff';
+                        previewContent.appendChild(iframe);
+                        currentContentType = 'html';
+                    } else {
+                        modalContent.classList.add('html-only');
+                        const pre = document.createElement('pre');
+                        pre.textContent = messageText;
+                        previewContent.appendChild(pre);
+                        currentContentType = 'html';
+                    }
                 } else {
                     currentContentBlob = await response.blob();
                     const url = window.URL.createObjectURL(currentContentBlob);
-                    previewContent.innerHTML = `<iframe src="${url}" width="100%" height="500px"></iframe>`;
+                    const iframe = document.createElement('iframe');
+                    iframe.src = url;
+                    iframe.width = '100%';
+                    iframe.height = '70vh';
+                    iframe.style.border = 'none';
+                    previewContent.appendChild(iframe);
                     currentContentType = 'pdf';
                 }
                 previewModal.style.display = 'flex';
@@ -1058,7 +1123,7 @@
         // Descargar contenido
         function downloadCurrentContent() {
             if (currentContentType === 'html') {
-                const iframe = document.querySelector('#previewContent iframe');
+                const iframe = previewContent.querySelector('iframe');
                 if (iframe) {
                     fetch(iframe.src)
                         .then(res => res.text())
@@ -1074,6 +1139,19 @@
                             window.URL.revokeObjectURL(url);
                         })
                         .catch(err => showToast(`Error al descargar: ${err.message}`, 'error'));
+                } else {
+                    const pre = previewContent.querySelector('pre');
+                    if (pre) {
+                        const blob = new Blob([pre.textContent], { type: 'text/html' });
+                        const url = window.URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = 'pagina_web.html';
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                        window.URL.revokeObjectURL(url);
+                    }
                 }
             } else if (currentContentBlob) {
                 const url = window.URL.createObjectURL(currentContentBlob);
@@ -1092,7 +1170,8 @@
         // Cerrar modal
         function closeModal() {
             previewModal.style.display = 'none';
-            document.getElementById('previewContent').innerHTML = '';
+            previewContent.innerHTML = '';
+            modalContent.classList.remove('html-only');
             currentContentBlob = null;
             currentContentType = 'pdf';
         }
@@ -1207,22 +1286,18 @@
 
         // Inicialización al cargar la página
         document.addEventListener('DOMContentLoaded', () => {
-            // Cargar tema guardado
             const savedTheme = localStorage.getItem('theme') || 'light';
             document.documentElement.setAttribute('data-theme', savedTheme);
             document.querySelector('.theme-toggle').textContent = savedTheme === 'dark' ? '☀️' : '🌙';
 
-            // Cargar sesiones y perfiles de estilo
             loadSessions();
             loadStyleProfiles();
             updateSuggestions();
 
-            // Cargar sesión por defecto si existe
             if (sessions[currentSessionId]) {
                 loadSession(currentSessionId);
             }
 
-            // Reintentar mensajes en cola si hay conexión
             if (offlineQueue.length && navigator.onLine) {
                 offlineQueue.forEach(prompt => {
                     promptInput.value = prompt;
@@ -1231,7 +1306,6 @@
             }
         });
 
-        // Detectar cambios de conexión
         window.addEventListener('online', () => {
             if (offlineQueue.length) {
                 offlineQueue.forEach(prompt => {
