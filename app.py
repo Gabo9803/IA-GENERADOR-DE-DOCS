@@ -245,7 +245,7 @@ def register():
         except sqlite3.IntegrityError:
             flash('El correo ya está registrado', 'error')
     
-    return render_template('login.html', register=True)
+    return render_template('register.html')
 
 @app.route('/logout')
 @login_required
@@ -278,16 +278,50 @@ def generate_document():
             session_messages[session_id] = []
 
         style_profile = get_style_profile(style_profile_id)
-        system_prompt = f"""
-        Eres GarBotGPT, un asistente que genera documentos profesionales en formato Markdown. 
-        - Tipo de documento: {doc_type} (e.g., carta formal, informe, correo, contrato, currículum).
-        - Tono: {tone} (formal, informal, técnico).
-        - Longitud: {length} (corto: ~100 palabras, medio: ~300 palabras, largo: ~600 palabras).
-        - Idioma: {language} (e.g., es para español, en para inglés, fr para francés).
-        - Usa encabezados (#, ##), listas (-), negritas (**), y tablas (|...|) cuando sea apropiado.
-        - Estilo: {style_profile}.
-        - Considera el contexto de los mensajes anteriores para mantener coherencia en la conversación.
-        """
+        
+        # Detectar si el prompt requiere una explicación estructurada
+        is_explanatory = re.search(r'^(¿Quién es|¿Qué es|explicar|detallar)\b', prompt, re.IGNORECASE) is not None
+        
+        if is_explanatory:
+            system_prompt = f"""
+            Eres GarBotGPT, un asistente que genera documentos profesionales en formato Markdown con una estructura clara para explicaciones.
+            - Tipo de documento: {doc_type} (e.g., explicación, biografía, informe).
+            - Tono: {tone} (formal, informal, técnico).
+            - Longitud: {length} (corto: ~100 palabras, medio: ~300 palabras, largo: ~600 palabras).
+            - Idioma: {language} (e.g., es para español, en para inglés, fr para francés).
+            - Usa la siguiente estructura en Markdown:
+              ```markdown
+              # [Tema o Nombre]
+              
+              ## Introducción
+              [Párrafo breve presentando el tema o persona.]
+              
+              ## Detalles Principales
+              - [Clave 1]: [Valor o descripción]
+              - [Clave 2]: [Valor o descripción]
+              - ...
+              
+              ## Contexto Adicional
+              [Párrafos detallando información relevante, como antecedentes, logros, o impacto.]
+              
+              ## Conclusión
+              [Resumen de la relevancia o importancia del tema.]
+              ```
+            - Usa encabezados (#, ##), listas (-), negritas (**), y tablas (|...|) cuando sea apropiado.
+            - Estilo: {style_profile}.
+            - Considera el contexto de los mensajes anteriores para mantener coherencia en la conversación.
+            """
+        else:
+            system_prompt = f"""
+            Eres GarBotGPT, un asistente que genera documentos profesionales en formato Markdown.
+            - Tipo de documento: {doc_type} (e.g., carta formal, informe, correo, contrato, currículum).
+            - Tono: {tone} (formal, informal, técnico).
+            - Longitud: {length} (corto: ~100 palabras, medio: ~300 palabras, largo: ~600 palabras).
+            - Idioma: {language} (e.g., es para español, en para inglés, fr para francés).
+            - Usa encabezados (#, ##), listas (-), negritas (**), y tablas (|...|) cuando sea apropiado.
+            - Estilo: {style_profile}.
+            - Considera el contexto de los mensajes anteriores para mantener coherencia en la conversación.
+            """
         
         messages = [{"role": "system", "content": system_prompt}]
         messages.extend(message_history[-10:])
