@@ -17,6 +17,7 @@ import sqlite3
 import bcrypt
 from collections import Counter
 import statistics
+import uuid
 
 app = Flask(__name__)
 app.secret_key = os.urandom(24)  # Clave secreta para sesiones
@@ -667,8 +668,8 @@ def generate_preview():
             return jsonify({'error': 'El contenido está vacío'}), 400
 
         if content_type == 'html':
-            # Almacenar el contenido HTML temporalmente
-            preview_id = f"{current_user.id}:{datetime.now().timestamp()}"
+            # Generar un ID único para la vista previa
+            preview_id = f"{current_user.id}:{uuid.uuid4()}"
             html_previews[preview_id] = content
             return jsonify({
                 'preview_id': preview_id,
@@ -713,9 +714,17 @@ def generate_preview():
 @app.route('/preview_html/<preview_id>', methods=['GET'])
 @login_required
 def preview_html(preview_id):
-    """Sirve el contenido HTML para la vista previa."""
+    """Sirve el contenido HTML para la vista previa como una página renderizable."""
     if preview_id in html_previews and preview_id.startswith(f"{current_user.id}:"):
-        return Response(html_previews[preview_id], mimetype='text/html')
+        # Asegurarse de que el contenido sea un HTML válido
+        html_content = html_previews[preview_id]
+        if not html_content.strip().startswith('<!DOCTYPE html>'):
+            html_content = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+<body>{html_content}</body>
+</html>"""
+        return Response(html_content, mimetype='text/html')
     return jsonify({'error': 'Vista previa no encontrada'}), 404
 
 @app.route('/analyze_document', methods=['POST'])
