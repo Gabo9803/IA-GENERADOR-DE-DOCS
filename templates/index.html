@@ -295,7 +295,7 @@
             gap: 12px;
         }
 
-        .copy-button, .pdf-button, .reply-button {
+        .copy-button, .preview-button, .reply-button {
             background: none;
             border: none;
             cursor: pointer;
@@ -305,7 +305,7 @@
             transition: all 0.3s ease;
         }
 
-        .copy-button:hover, .pdf-button:hover, .reply-button:hover {
+        .copy-button:hover, .preview-button:hover, .reply-button:hover {
             opacity: 1;
             transform: scale(1.2);
         }
@@ -411,6 +411,7 @@
             cursor: pointer;
             font-size: 0.9rem;
             transition: all 0.3s ease;
+            position: relative;
             backdrop-filter: blur(5px);
             -webkit-backdrop-filter: blur(5px);
         }
@@ -418,6 +419,28 @@
         .suggestion:hover {
             background: var(--accent-color);
             color: white;
+            transform: translateY(-2px);
+            box-shadow: var(--shadow);
+        }
+
+        .suggestion-tooltip {
+            position: absolute;
+            top: -40px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: var(--toast-bg);
+            color: var(--toast-text);
+            padding: 5px 10px;
+            border-radius: 6px;
+            font-size: 0.8rem;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+            pointer-events: none;
+            white-space: nowrap;
+        }
+
+        .suggestion:hover .suggestion-tooltip {
+            opacity: 1;
         }
 
         .toast {
@@ -565,6 +588,7 @@
                 <option value="email">Correo Electrónico</option>
                 <option value="contract">Contrato</option>
                 <option value="resume">Currículum</option>
+                <option value="html">Página Web (HTML)</option>
             </select>
             <select id="tone">
                 <option value="neutral">Neutral</option>
@@ -611,11 +635,7 @@
             </div>
             <div class="input-area">
                 <div class="progress-bar" id="progressBar"></div>
-                <div class="suggestions">
-                    <div class="suggestion" onclick="useSuggestion('Escribe una carta formal')">Carta formal</div>
-                    <div class="suggestion" onclick="useSuggestion('Redacta un informe breve')">Informe breve</div>
-                    <div class="suggestion" onclick="useSuggestion('Crea un correo profesional')">Correo profesional</div>
-                </div>
+                <div class="suggestions" id="suggestions"></div>
                 <div class="input-group">
                     <textarea id="prompt" placeholder="Describe el documento que deseas generar..."></textarea>
                     <button class="send" onclick="sendMessage()">Enviar</button>
@@ -623,29 +643,40 @@
             </div>
         </div>
     </div>
-    <div class="modal" id="pdfModal">
+    <div class="modal" id="previewModal">
         <div class="modal-content">
             <button class="modal-close" onclick="closeModal()">✕</button>
-            <h2>Vista Previa del PDF</h2>
-            <div id="pdfPreview"></div>
-            <button class="send" onclick="downloadCurrentPDF()">Descargar PDF</button>
+            <h2>Vista Previa</h2>
+            <div id="previewContent"></div>
+            <button class="send" onclick="downloadCurrentContent()">Descargar</button>
         </div>
     </div>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script>
         const chatArea = document.getElementById('chatArea');
         const promptInput = document.getElementById('prompt');
-        const pdfModal = document.getElementById('pdfModal');
+        const previewModal = document.getElementById('previewModal');
         const sessionList = document.getElementById('sessionList');
         const styleList = document.getElementById('styleList');
         const searchInput = document.getElementById('searchInput');
         const progressBar = document.getElementById('progressBar');
         const uploadArea = document.getElementById('uploadArea');
         const fileInput = document.getElementById('fileInput');
-        let currentPDFBlob = null;
+        const suggestionsContainer = document.getElementById('suggestions');
+        let currentContentBlob = null;
+        let currentContentType = 'pdf';
         let currentSessionId = 'default';
         let sessions = JSON.parse(localStorage.getItem('sessions') || '{}');
         let offlineQueue = [];
+
+        // Lista de sugerencias base
+        const baseSuggestions = [
+            { prompt: 'Escribe una carta formal', description: 'Genera una carta profesional para negocios o comunicaciones oficiales.' },
+            { prompt: 'Redacta un informe técnico', description: 'Crea un informe detallado con estructura técnica y datos.' },
+            { prompt: 'Crea un correo profesional', description: 'Escribe un correo formal para un entorno laboral.' },
+            { prompt: 'Diseña una página web sencilla', description: 'Genera código HTML para una página web responsiva.' },
+            { prompt: 'Explica qué es la inteligencia artificial', description: 'Proporciona una explicación estructurada sobre IA.' }
+        ];
 
         // Cargar sesiones
         function loadSessions() {
@@ -726,9 +757,10 @@
         function loadSession(id) {
             currentSessionId = id;
             chatArea.innerHTML = '';
-            (sessions[id].messages || []).forEach(msg => addMessage(msg.content, msg.isUser, false));
+            (sessions[id].messages || []).forEach(msg => addMessage(msg.content, msg.isUser, msg.contentType || 'pdf', false));
             toggleSidebar();
             showToast('Sesión cargada');
+            updateSuggestions();
         }
 
         // Nueva sesión
@@ -740,6 +772,7 @@
             saveSessions();
             loadSessions();
             showToast('Nueva sesión creada');
+            updateSuggestions();
         }
 
         // Guardar sesiones
@@ -772,8 +805,37 @@
             setTimeout(() => toast.remove(), 4000);
         }
 
+        // Actualizar sugerencias dinámicas
+        function updateSuggestions() {
+            suggestionsContainer.innerHTML = '';
+            const sessionMessages = sessions[currentSessionId]?.messages || [];
+            const recentPrompts = sessionMessages
+                .filter(msg => msg.isUser)
+                .map(msg => msg.content)
+                .slice(-3);
+            
+            const suggestions = [
+                ...baseSuggestions,
+                ...recentPrompts.map(prompt => ({
+                    prompt,
+                    description: 'Basado en tu historial reciente.'
+                }))
+            ].slice(0, 5); // Limitar a 5 sugerencias
+
+            suggestions.forEach(({ prompt, description }) => {
+                const suggestion = document.createElement('div');
+                suggestion.className = 'suggestion';
+                suggestion.innerHTML = `
+                    ${prompt}
+                    <span class="suggestion-tooltip">${description}</span>
+                `;
+                suggestion.onclick = () => useSuggestion(prompt);
+                suggestionsContainer.appendChild(suggestion);
+            });
+        }
+
         // Agregar mensaje
-        function addMessage(content, isUser = false, save = true) {
+        function addMessage(content, isUser = false, contentType = 'pdf', save = true) {
             const messageDiv = document.createElement('div');
             messageDiv.className = isUser ? 'message user-message' : 'message ai-message';
             if (isUser) {
@@ -784,7 +846,7 @@
                     <div class="ai-message-content">${marked.parse(content)}</div>
                     <div class="message-buttons">
                         <button class="copy-button" onclick="copyMessage(this)" title="Copiar">📋</button>
-                        <button class="pdf-button" onclick="previewPDF(this)" title="Vista previa PDF">📄</button>
+                        <button class="preview-button" onclick="previewContent(this, '${contentType}')" title="Vista previa">📄</button>
                         <button class="reply-button" onclick="replyToMessage(this)" title="Responder">↩️</button>
                     </div>`;
             }
@@ -792,7 +854,7 @@
             chatArea.scrollTop = chatArea.scrollHeight;
             if (save) {
                 sessions[currentSessionId] = sessions[currentSessionId] || { name: `Sesión ${currentSessionId}`, messages: [] };
-                sessions[currentSessionId].messages.push({ content, isUser });
+                sessions[currentSessionId].messages.push({ content, isUser, contentType });
                 saveSessions();
             }
         }
@@ -875,8 +937,9 @@
                     addMessage(`Error: ${data.error}`);
                     offlineQueue.push(prompt);
                 } else {
-                    addMessage(data.document);
+                    addMessage(data.document, false, data.content_type);
                     offlineQueue = offlineQueue.filter(p => p !== prompt);
+                    updateSuggestions();
                 }
             } catch (error) {
                 removeTypingIndicator();
@@ -895,35 +958,65 @@
             setTimeout(() => button.textContent = '📋', 2000);
         }
 
-        // Vista previa de PDF
-        async function previewPDF(button) {
+        // Vista previa de contenido
+        async function previewContent(button, contentType) {
             const messageText = button.parentElement.previousElementSibling.textContent;
             const styleProfile = document.getElementById('styleProfile').value || null;
             try {
-                const response = await fetch('/generate_pdf', {
+                const response = await fetch('/generate_preview', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ content: messageText, style_profile_id: styleProfile })
+                    body: JSON.stringify({ 
+                        content: messageText, 
+                        content_type: contentType,
+                        style_profile_id: styleProfile 
+                    })
                 });
                 if (!response.ok) {
                     const data = await response.json();
                     showToast(`Error: ${data.error}`, 'error');
                     return;
                 }
-                currentPDFBlob = await response.blob();
-                const url = window.URL.createObjectURL(currentPDFBlob);
-                const pdfPreview = document.getElementById('pdfPreview');
-                pdfPreview.innerHTML = `<iframe src="${url}" width="100%" height="500px"></iframe>`;
-                pdfModal.style.display = 'flex';
+                const previewContent = document.getElementById('previewContent');
+                if (contentType === 'html') {
+                    const data = await response.json();
+                    previewContent.innerHTML = `<iframe src="/preview_html/${data.preview_id}" width="100%" height="500px"></iframe>`;
+                    currentContentType = 'html';
+                } else {
+                    currentContentBlob = await response.blob();
+                    const url = window.URL.createObjectURL(currentContentBlob);
+                    previewContent.innerHTML = `<iframe src="${url}" width="100%" height="500px"></iframe>`;
+                    currentContentType = 'pdf';
+                }
+                previewModal.style.display = 'flex';
             } catch (error) {
                 showToast(`Error: ${error.message}`, 'error');
             }
         }
 
-        // Descargar PDF
-        function downloadCurrentPDF() {
-            if (currentPDFBlob) {
-                const url = window.URL.createObjectURL(currentPDFBlob);
+        // Descargar contenido
+        function downloadCurrentContent() {
+            if (currentContentType === 'html') {
+                const iframe = document.querySelector('#previewContent iframe');
+                if (iframe) {
+                    fetch(iframe.src)
+                        .then(res => res.text())
+                        .then(html => {
+                            const blob = new Blob([html], { type: 'text/html' });
+                            const url = window.URL.createObjectURL(blob);
+                            const a = document.createElement('a');
+                            a.href = url;
+                            a.download = 'pagina_web.html';
+                            document.body.appendChild(a);
+                            a.click();
+                            window.URL.revokeObjectURL(url);
+                            document.body.removeChild(a);
+                            showToast('HTML descargado');
+                            closeModal();
+                        });
+                }
+            } else if (currentContentBlob) {
+                const url = window.URL.createObjectURL(currentContentBlob);
                 const a = document.createElement('a');
                 a.href = url;
                 a.download = 'documento_generado.pdf';
@@ -938,9 +1031,10 @@
 
         // Cerrar modal
         function closeModal() {
-            pdfModal.style.display = 'none';
-            document.getElementById('pdfPreview').innerHTML = '';
-            currentPDFBlob = null;
+            previewModal.style.display = 'none';
+            document.getElementById('previewContent').innerHTML = '';
+            currentContentBlob = null;
+            currentContentType = 'pdf';
         }
 
         // Limpiar chat
@@ -949,6 +1043,7 @@
             sessions[currentSessionId].messages = [];
             saveSessions();
             showToast('Chat limpiado');
+            updateSuggestions();
         }
 
         // Exportar chat
@@ -1046,19 +1141,20 @@
             }
             if (e.ctrlKey && e.key === 'p') {
                 e.preventDefault();
-                const lastAIMessage = chatArea.querySelector('.ai-message:last-child .pdf-button');
+                const lastAIMessage = chatArea.querySelector('.ai-message:last-child .preview-button');
                 if (lastAIMessage) lastAIMessage.click();
             }
-            if (e.key === 'Enter' && !e.shiftKey && document.activeElement === promptInput) {
+            if (e.key === 'Enter' && !e.ShiftKey && document.activeElement === promptInput) {
                 e.preventDefault();
                 sendMessage();
             }
         });
 
-        // Cargar sesiones y perfiles al iniciar
+        // Cargar sesiones, perfiles y sugerencias al iniciar
         loadSessions();
         loadStyleProfiles();
         loadSession(currentSessionId);
+        updateSuggestions();
     </script>
 </body>
 </html>
