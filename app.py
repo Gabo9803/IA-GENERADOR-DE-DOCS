@@ -17,6 +17,7 @@ import sqlite3
 import bcrypt
 from collections import Counter
 import statistics
+import uuid
 
 app = Flask(__name__)
 app.secret_key = os.urandom(24)  # Clave secreta para sesiones
@@ -489,15 +490,22 @@ def generate_document():
         language = data.get('language', 'es')
         style_profile_id = data.get('style_profile_id', None)
         message_history = data.get('message_history', [])
+        model = data.get('model', 'gpt-3.5-turbo')  # Modelo por defecto
+
+        # Validar modelo
+        allowed_models = ['gpt-3.5-turbo', 'gpt-4o']
+        if model not in allowed_models:
+            return jsonify({'error': f'Modelo no válido. Usa uno de: {allowed_models}'}), 400
 
         if not prompt:
             return jsonify({'error': 'El prompt está vacío'}), 400
 
-        cache_key = f"{current_user.id}:{session_id}:{prompt}:{doc_type}:{tone}:{length}:{language}:{style_profile_id}"
+        cache_key = f"{current_user.id}:{session_id}:{prompt}:{doc_type}:{tone}:{length}:{language}:{style_profile_id}:{model}"
         if cache_key in response_cache:
             return jsonify({
-                'document': response_cache[cache_key],
-                'content_type': 'html' if doc_type == 'html' or 'html' in prompt.lower() else 'pdf'
+                'document': response_cache[cache_key]['document'],
+                'content_type': response_cache[cache_key]['content_type'],
+                'includes_css': response_cache[cache_key].get('includes_css', False)
             })
 
         if session_id not in session_messages:
@@ -510,6 +518,9 @@ def generate_document():
         
         # Detectar si el prompt solicita HTML
         is_html = doc_type == 'html' or re.search(r'\b(html|página web|sitio web)\b', prompt, re.IGNORECASE) is not None
+        
+        # Detectar si el prompt solicita CSS explícitamente
+        requests_css = re.search(r'\b(css|estilo|diseño|con estilo)\b', prompt, re.IGNORECASE) is not None
         
         if is_explanatory:
             system_prompt = f"""
@@ -541,20 +552,45 @@ def generate_document():
             - Considera el contexto de los mensajes anteriores para mantener coherencia en la conversación.
             """
         elif is_html:
-            system_prompt = f"""
-            Eres GarBotGPT, un asistente que genera páginas web en formato HTML con CSS y JavaScript si es necesario.
-            - Tipo de documento: página web (HTML).
-            - Tono: {tone} (formal, informal, técnico).
-            - Longitud: {length} (corto: ~100 líneas, medio: ~300 líneas, largo: ~600 líneas).
-            - Idioma: {language} (e.g., es para español, en para inglés, fr para francés).
-            - Genera código HTML completo con:
-              - Estructura semántica (<header>, <main>, <footer>, etc.).
-              - Estilos CSS internos (en <style>) adaptados al tono y propósito.
-              - JavaScript opcional (en <script>) si el prompt lo requiere.
-              - Usa un diseño responsivo y moderno.
-            - Estilo: {style_profile}.
-            - Considera el contexto de los mensajes anteriores para mantener coherencia.
-            """
+            if requests_css:
+                system_prompt = f"""
+                Eres GarBotGPT, un asistente que genera páginas web completas en formato HTML con CSS embebido.
+                - Tipo de documento: página web (HTML con CSS).
+                - Tono: {tone} (formal, informal, técnico).
+                - Longitud: {length} (corto: ~100 líneas, medio: ~300 líneas, largo: ~600 líneas).
+                - Idioma: {language} (e.g., es para español, en para inglés, fr para francés).
+                - Genera un archivo HTML completo autocontenido con:
+                  - Estructura semántica completa (<header>, <nav>, <main>, <section>, <footer>, etc.).
+                  - Metaetiquetas esenciales (<meta charset="UTF-8">, viewport, title).
+                  - Estilos CSS embebidos dentro de una etiqueta <style> (NO uses enlaces a archivos CSS externos).
+                    - Diseño responsivo usando flexbox o grid.
+                    - Paleta de colores moderna y coherente.
+                    - Soporte para temas claro y oscuro usando variables CSS (--variable-name).
+                    - Transiciones y animaciones suaves para interactividad (e.g., hover effects).
+                    - Tipografía profesional (usar fuentes de Google Fonts si es necesario, e.g., 'Roboto', importadas via @import).
+                    - Sombras, bordes redondeados y otros efectos visuales modernos.
+                    - Accesibilidad (ARIA roles, contraste adecuado).
+                  - JavaScript opcional (en <script>) si el prompt lo requiere.
+                - Asegúrate de que el CSS esté bien organizado y comentado dentro de <style>.
+                - Estilo: {style_profile}.
+                - Considera el contexto de los mensajes anteriores para mantener coherencia.
+                """
+            else:
+                system_prompt = f"""
+                Eres GarBotGPT, un asistente que genera páginas web en formato HTML sin CSS.
+                - Tipo de documento: página web (solo HTML).
+                - Tono: {tone} (formal, informal, técnico).
+                - Longitud: {length} (corto: ~100 líneas, medio: ~300 líneas, largo: ~600 líneas).
+                - Idioma: {language} (e.g., es para español, en para inglés, fr para francés).
+                - Genera código HTML completo con:
+                  - Estructura semántica (<header>, <main>, <footer>, etc.).
+                  - Metaetiquetas esenciales (<meta charset="UTF-8">, viewport, title).
+                  - No incluyas CSS ni estilos inline a menos que se indique explícitamente.
+                  - JavaScript opcional (en <script>) si el prompt lo requiere.
+                - Asegúrate de que el HTML sea válido y semántico.
+                - Estilo: {style_profile}.
+                - Considera el contexto de los mensajes anteriores para mantener coherencia.
+                """
         else:
             system_prompt = f"""
             Eres GarBotGPT, un asistente que genera documentos profesionales en formato Markdown.
@@ -572,21 +608,26 @@ def generate_document():
         messages.append({"role": "user", "content": prompt})
 
         response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
+            model=model,  # Usar el modelo seleccionado
             messages=messages,
-            max_tokens=1000,
+            max_tokens=1500,  # Aumentado para permitir CSS detallado
             temperature=0.7
         )
 
         document = response.choices[0].message.content
-        response_cache[cache_key] = document
+        response_cache[cache_key] = {
+            'document': document,
+            'content_type': 'html' if is_html else 'pdf',
+            'includes_css': requests_css if is_html else False
+        }
 
         session_messages[session_id].append({"role": "user", "content": prompt})
         session_messages[session_id].append({"role": "assistant", "content": document})
 
         return jsonify({
             'document': document,
-            'content_type': 'html' if is_html else 'pdf'
+            'content_type': 'html' if is_html else 'pdf',
+            'includes_css': requests_css if is_html else False
         })
     except openai.AuthenticationError:
         return jsonify({'error': 'Error de autenticación con OpenAI. Verifica la clave API.'}), 401
@@ -628,14 +669,19 @@ def generate_preview():
         content = data.get('content', '')
         content_type = data.get('content_type', 'pdf')
         style_profile_id = data.get('style_profile_id', None)
+        includes_css = data.get('includes_css', False)
         if not content:
             return jsonify({'error': 'El contenido está vacío'}), 400
 
         if content_type == 'html':
-            # Almacenar el contenido HTML temporalmente
-            preview_id = f"{current_user.id}:{datetime.now().timestamp()}"
+            # Generar un ID único para la vista previa
+            preview_id = f"{current_user.id}:{uuid.uuid4()}"
             html_previews[preview_id] = content
-            return jsonify({'preview_id': preview_id, 'content_type': 'html'})
+            return jsonify({
+                'preview_id': preview_id,
+                'content_type': 'html',
+                'includes_css': includes_css
+            })
         
         # Generar PDF
         buffer = BytesIO()
@@ -674,9 +720,17 @@ def generate_preview():
 @app.route('/preview_html/<preview_id>', methods=['GET'])
 @login_required
 def preview_html(preview_id):
-    """Sirve el contenido HTML para la vista previa."""
+    """Sirve el contenido HTML para la vista previa como una página renderizable."""
     if preview_id in html_previews and preview_id.startswith(f"{current_user.id}:"):
-        return Response(html_previews[preview_id], mimetype='text/html')
+        # Asegurarse de que el contenido sea un HTML válido
+        html_content = html_previews[preview_id]
+        if not html_content.strip().startswith('<!DOCTYPE html>'):
+            html_content = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+<body>{html_content}</body>
+</html>"""
+        return Response(html_content, mimetype='text/html')
     return jsonify({'error': 'Vista previa no encontrada'}), 404
 
 @app.route('/analyze_document', methods=['POST'])
