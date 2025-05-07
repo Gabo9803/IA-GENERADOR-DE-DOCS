@@ -100,6 +100,12 @@
             font-weight: 700;
         }
 
+        .sidebar h3 {
+            font-size: 1.2rem;
+            font-weight: 600;
+            margin-top: 10px;
+        }
+
         .sidebar-toggle {
             background: none;
             border: none;
@@ -253,6 +259,7 @@
             flex-direction: column;
             gap: 25px;
             background: transparent;
+            position: relative;
         }
 
         .message {
@@ -266,6 +273,8 @@
             box-shadow: var(--shadow);
             backdrop-filter: blur(10px);
             -webkit-backdrop-filter: blur(10px);
+            word-break: break-word;
+            overflow-wrap: break-word;
         }
 
         .user-message {
@@ -281,10 +290,21 @@
             color: var(--text-color);
             align-self: flex-start;
             border-bottom-left-radius: 4px;
+            position: relative;
         }
 
         .ai-message-content {
             white-space: pre-wrap;
+            overflow-x: auto;
+        }
+
+        .ai-message-content pre, .ai-message-content code {
+            background: rgba(0, 0, 0, 0.1);
+            padding: 5px;
+            border-radius: 4px;
+            font-family: 'Courier New', Courier, monospace;
+            white-space: pre-wrap;
+            overflow-x: auto;
         }
 
         .message-buttons {
@@ -293,6 +313,12 @@
             right: 10px;
             display: flex;
             gap: 12px;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+
+        .message:hover .message-buttons {
+            opacity: 1;
         }
 
         .copy-button, .preview-button, .reply-button {
@@ -300,13 +326,11 @@
             border: none;
             cursor: pointer;
             color: var(--text-color);
-            opacity: 0.8;
             font-size: 1.2rem;
             transition: all 0.3s ease;
         }
 
         .copy-button:hover, .preview-button:hover, .reply-button:hover {
-            opacity: 1;
             transform: scale(1.2);
         }
 
@@ -486,6 +510,12 @@
             -webkit-backdrop-filter: blur(10px);
         }
 
+        .modal-content h2 {
+            font-size: 1.5rem;
+            margin-bottom: 20px;
+            color: var(--text-color);
+        }
+
         .modal-close {
             position: absolute;
             top: 15px;
@@ -495,6 +525,10 @@
             font-size: 1.4rem;
             cursor: pointer;
             color: var(--text-color);
+        }
+
+        .modal-close:hover {
+            color: var(--accent-color);
         }
 
         .progress-bar {
@@ -514,8 +548,8 @@
         }
 
         @keyframes slideIn {
-            from { opacity: 0; transform: translateX(30px); }
-            to { opacity: 1; transform: translateX(0); }
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
         }
 
         @keyframes bounce {
@@ -558,7 +592,7 @@
                 padding: 12px 18px;
             }
 
-            textarea {
+            .textarea {
                 min-height: 50px;
                 font-size: 0.95rem;
             }
@@ -653,6 +687,16 @@
     </div>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script>
+        // Configurar opciones de marked.js para manejar mejor el Markdown
+        marked.setOptions({
+            breaks: true, // Permitir saltos de línea simples
+            gfm: true, // Habilitar GitHub Flavored Markdown
+            highlight: function(code, lang) {
+                // Opcional: Añadir resaltado de sintaxis si usas una librería como highlight.js
+                return code;
+            }
+        });
+
         const chatArea = document.getElementById('chatArea');
         const promptInput = document.getElementById('prompt');
         const previewModal = document.getElementById('previewModal');
@@ -834,6 +878,13 @@
             });
         }
 
+        // Usar una sugerencia
+        function useSuggestion(prompt) {
+            promptInput.value = prompt;
+            promptInput.focus();
+            sendMessage();
+        }
+
         // Agregar mensaje
         function addMessage(content, isUser = false, contentType = 'pdf', save = true) {
             const messageDiv = document.createElement('div');
@@ -842,8 +893,14 @@
                 messageDiv.textContent = content;
                 messageDiv.onclick = () => editMessage(messageDiv);
             } else {
+                // Escapar el contenido para evitar inyecciones y luego parsear como Markdown
+                const escapedContent = content
+                    .replace(/&/g, '&')
+                    .replace(/</g, '<')
+                    .replace(/>/g, '>');
+                const renderedContent = marked.parse(escapedContent);
                 messageDiv.innerHTML = `
-                    <div class="ai-message-content">${marked.parse(content)}</div>
+                    <div class="ai-message-content">${renderedContent}</div>
                     <div class="message-buttons">
                         <button class="copy-button" onclick="copyMessage(this)" title="Copiar">📋</button>
                         <button class="preview-button" onclick="previewContent(this, '${contentType}')" title="Vista previa">📄</button>
@@ -851,7 +908,8 @@
                     </div>`;
             }
             chatArea.appendChild(messageDiv);
-            chatArea.scrollTop = chatArea.scrollHeight;
+            // Forzar el scroll al último mensaje
+            chatArea.scrollTo({ top: chatArea.scrollHeight, behavior: 'smooth' });
             if (save) {
                 sessions[currentSessionId] = sessions[currentSessionId] || { name: `Sesión ${currentSessionId}`, messages: [] };
                 sessions[currentSessionId].messages.push({ content, isUser, contentType });
@@ -883,7 +941,7 @@
             typingDiv.innerHTML = 'GarBotGPT está procesando contexto <span></span><span></span><span></span>';
             typingDiv.id = 'typingIndicator';
             chatArea.appendChild(typingDiv);
-            chatArea.scrollTop = chatArea.scrollHeight;
+            chatArea.scrollTo({ top: chatArea.scrollHeight, behavior: 'smooth' });
         }
 
         function removeTypingIndicator() {
@@ -951,16 +1009,19 @@
 
         // Copiar mensaje
         function copyMessage(button) {
-            const messageText = button.parentElement.previousElementSibling.textContent;
-            navigator.clipboard.writeText(messageText);
-            button.textContent = '✅';
-            showToast('Texto copiado');
-            setTimeout(() => button.textContent = '📋', 2000);
+            const messageContent = button.parentElement.previousElementSibling.innerText;
+            navigator.clipboard.writeText(messageContent).then(() => {
+                button.textContent = '✅';
+                showToast('Texto copiado');
+                setTimeout(() => button.textContent = '📋', 2000);
+            }).catch(err => {
+                showToast('Error al copiar: ' + err, 'error');
+            });
         }
 
         // Vista previa de contenido
         async function previewContent(button, contentType) {
-            const messageText = button.parentElement.previousElementSibling.textContent;
+            const messageText = button.parentElement.previousElementSibling.innerText;
             const styleProfile = document.getElementById('styleProfile').value || null;
             try {
                 const response = await fetch('/generate_preview', {
@@ -1009,11 +1070,10 @@
                             a.download = 'pagina_web.html';
                             document.body.appendChild(a);
                             a.click();
-                            window.URL.revokeObjectURL(url);
                             document.body.removeChild(a);
-                            showToast('HTML descargado');
-                            closeModal();
-                        });
+                            window.URL.revokeObjectURL(url);
+                        })
+                        .catch(err => showToast(`Error al descargar: ${err.message}`, 'error'));
                 }
             } else if (currentContentBlob) {
                 const url = window.URL.createObjectURL(currentContentBlob);
@@ -1022,10 +1082,10 @@
                 a.download = 'documento_generado.pdf';
                 document.body.appendChild(a);
                 a.click();
-                window.URL.revokeObjectURL(url);
                 document.body.removeChild(a);
-                showToast('PDF descargado');
-                closeModal();
+                window.URL.revokeObjectURL(url);
+            } else {
+                showToast('No hay contenido para descargar', 'error');
             }
         }
 
@@ -1039,6 +1099,7 @@
 
         // Limpiar chat
         function clearChat() {
+            if (!confirm('¿Estás seguro de que quieres limpiar el chat?')) return;
             chatArea.innerHTML = '';
             sessions[currentSessionId].messages = [];
             saveSessions();
@@ -1048,27 +1109,32 @@
 
         // Exportar chat
         function exportChat() {
-            const messages = sessions[currentSessionId].messages.map(msg => `${msg.isUser ? 'Usuario' : 'GarBotGPT'}: ${msg.content}`).join('\n\n');
-            const blob = new Blob([messages], { type: 'text/plain' });
+            const messages = sessions[currentSessionId]?.messages || [];
+            if (messages.length === 0) {
+                showToast('No hay mensajes para exportar', 'error');
+                return;
+            }
+            const chatText = messages.map(msg => `${msg.isUser ? 'Usuario' : 'GarBotGPT'}: ${msg.content}`).join('\n\n');
+            const blob = new Blob([chatText], { type: 'text/plain' });
             const url = window.URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = 'chat_exportado.txt';
+            a.download = `chat_sesion_${currentSessionId}.txt`;
             document.body.appendChild(a);
             a.click();
-            window.URL.revokeObjectURL(url);
             document.body.removeChild(a);
+            window.URL.revokeObjectURL(url);
             showToast('Chat exportado');
         }
 
         // Cambiar tema
         function toggleTheme() {
-            const container = document.querySelector('.container');
-            const themeButton = document.querySelector('.theme-toggle');
-            const isDark = container.getAttribute('data-theme') === 'dark';
-            container.setAttribute('data-theme', isDark ? 'light' : 'dark');
-            themeButton.textContent = isDark ? '☀️' : '🌙';
-            showToast(`Tema ${isDark ? 'claro' : 'oscuro'} activado`);
+            const currentTheme = document.documentElement.getAttribute('data-theme');
+            const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+            document.documentElement.setAttribute('data-theme', newTheme);
+            localStorage.setItem('theme', newTheme);
+            document.querySelector('.theme-toggle').textContent = newTheme === 'dark' ? '☀️' : '🌙';
+            showToast(`Tema ${newTheme === 'dark' ? 'oscuro' : 'claro'} activado`);
         }
 
         // Alternar sidebar
@@ -1077,84 +1143,107 @@
             sidebar.classList.toggle('hidden');
         }
 
-        // Usar sugerencia
-        function useSuggestion(prompt) {
-            promptInput.value = prompt;
-            promptInput.focus();
-        }
-
-        // Manejo de subida de archivos
-        uploadArea.addEventListener('click', () => fileInput.click());
-        uploadArea.addEventListener('dragover', e => {
-            e.preventDefault();
-            uploadArea.classList.add('dragover');
-        });
-        uploadArea.addEventListener('dragleave', () => uploadArea.classList.remove('dragover'));
-        uploadArea.addEventListener('drop', e => {
-            e.preventDefault();
-            uploadArea.classList.remove('dragover');
-            const file = e.dataTransfer.files[0];
-            uploadFile(file);
-        });
-        fileInput.addEventListener('change', () => {
-            if (fileInput.files[0]) uploadFile(fileInput.files[0]);
-        });
-
-        async function uploadFile(file) {
+        // Subir documento
+        async function uploadDocument(file) {
+            if (!file) return;
             const formData = new FormData();
             formData.append('file', file);
             try {
-                progressBar.style.width = '30%';
                 const response = await fetch('/analyze_document', {
                     method: 'POST',
                     body: formData
                 });
-                progressBar.style.width = '100%';
-                setTimeout(() => progressBar.style.width = '0', 300);
                 const data = await response.json();
                 if (data.error) {
                     showToast(`Error: ${data.error}`, 'error');
                 } else {
-                    showToast('Documento analizado');
+                    showToast('Documento analizado y perfil de estilo creado');
                     loadStyleProfiles();
                 }
             } catch (error) {
-                showToast(`Error: ${error.message}`, 'error');
+                showToast(`Error al subir: ${error.message}`, 'error');
             }
         }
 
-        // Ajustar altura de textarea
-        promptInput.addEventListener('input', () => {
-            promptInput.style.height = '60px';
-            promptInput.style.height = `${Math.min(promptInput.scrollHeight, 200)}px`;
+        // Configurar eventos para el área de subida
+        uploadArea.addEventListener('click', () => fileInput.click());
+        fileInput.addEventListener('change', () => {
+            if (fileInput.files.length) {
+                uploadDocument(fileInput.files[0]);
+                fileInput.value = '';
+            }
+        });
+        uploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadArea.classList.add('dragover');
+        });
+        uploadArea.addEventListener('dragleave', () => {
+            uploadArea.classList.remove('dragover');
+        });
+        uploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadArea.classList.remove('dragover');
+            const file = e.dataTransfer.files[0];
+            if (file && (file.type === 'application/pdf' || file.type === 'text/plain')) {
+                uploadDocument(file);
+            } else {
+                showToast('Por favor, sube un archivo PDF o TXT', 'error');
+            }
         });
 
-        // Atajos de teclado
-        document.addEventListener('keydown', e => {
-            if (e.ctrlKey && e.key === 'n') {
-                e.preventDefault();
-                newSession();
-            }
-            if (e.ctrlKey && e.key === 'f') {
-                e.preventDefault();
-                searchInput.focus();
-            }
-            if (e.ctrlKey && e.key === 'p') {
-                e.preventDefault();
-                const lastAIMessage = chatArea.querySelector('.ai-message:last-child .preview-button');
-                if (lastAIMessage) lastAIMessage.click();
-            }
-            if (e.key === 'Enter' && !e.ShiftKey && document.activeElement === promptInput) {
+        // Ajustar altura del textarea automáticamente
+        promptInput.addEventListener('input', () => {
+            promptInput.style.height = '60px';
+            promptInput.style.height = `${promptInput.scrollHeight}px`;
+        });
+
+        // Enviar mensaje con Enter
+        promptInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
                 sendMessage();
             }
         });
 
-        // Cargar sesiones, perfiles y sugerencias al iniciar
-        loadSessions();
-        loadStyleProfiles();
-        loadSession(currentSessionId);
-        updateSuggestions();
+        // Inicialización al cargar la página
+        document.addEventListener('DOMContentLoaded', () => {
+            // Cargar tema guardado
+            const savedTheme = localStorage.getItem('theme') || 'light';
+            document.documentElement.setAttribute('data-theme', savedTheme);
+            document.querySelector('.theme-toggle').textContent = savedTheme === 'dark' ? '☀️' : '🌙';
+
+            // Cargar sesiones y perfiles de estilo
+            loadSessions();
+            loadStyleProfiles();
+            updateSuggestions();
+
+            // Cargar sesión por defecto si existe
+            if (sessions[currentSessionId]) {
+                loadSession(currentSessionId);
+            }
+
+            // Reintentar mensajes en cola si hay conexión
+            if (offlineQueue.length && navigator.onLine) {
+                offlineQueue.forEach(prompt => {
+                    promptInput.value = prompt;
+                    sendMessage();
+                });
+            }
+        });
+
+        // Detectar cambios de conexión
+        window.addEventListener('online', () => {
+            if (offlineQueue.length) {
+                offlineQueue.forEach(prompt => {
+                    promptInput.value = prompt;
+                    sendMessage();
+                });
+            }
+        });
+
+        window.addEventListener('offline', () => {
+            showToast('Sin conexión. Los mensajes se guardarán para reintentar.', 'error');
+        });
     </script>
 </body>
 </html>
