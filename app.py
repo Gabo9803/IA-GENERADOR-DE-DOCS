@@ -15,6 +15,9 @@ import re
 import json
 import sqlite3
 import bcrypt
+from collections import Counter
+import statistics
+import uuid
 
 app = Flask(__name__)
 app.secret_key = os.urandom(24)  # Clave secreta para sesiones
@@ -50,8 +53,11 @@ def load_user(user_id):
         return User(user[0], user[1])
     return None
 
-# Inicializar la base de datos
+# Definir la versión actual del esquema
+CURRENT_SCHEMA_VERSION = 2
+
 def init_db():
+    """Inicializa la base de datos con las tablas necesarias."""
     conn = sqlite3.connect('profiles.db')
     cursor = conn.cursor()
     
@@ -64,7 +70,15 @@ def init_db():
         )
     ''')
     
-    # Tabla de perfiles de estilo
+    # Tabla para rastrear la versión del esquema
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS schema_version (
+            id INTEGER PRIMARY KEY,
+            version INTEGER NOT NULL
+        )
+    ''')
+    
+    # Tabla de perfiles de estilo (estructura base)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS style_profiles (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -81,8 +95,45 @@ def init_db():
     conn.commit()
     conn.close()
 
-# Ejecutar la inicialización de la base de datos al iniciar la aplicación
+def migrate_db():
+    """Verifica y migra la base de datos a la versión actual."""
+    conn = sqlite3.connect('profiles.db')
+    cursor = conn.cursor()
+    
+    # Obtener la versión actual del esquema
+    cursor.execute('SELECT version FROM schema_version WHERE id = 1')
+    result = cursor.fetchone()
+    if result:
+        current_version = result[0]
+    else:
+        # Si no existe, asumir versión 0 e insertar
+        current_version = 0
+        cursor.execute('INSERT INTO schema_version (id, version) VALUES (1, ?)', (current_version,))
+        conn.commit()
+    
+    # Migrar desde la versión actual hasta CURRENT_SCHEMA_VERSION
+    if current_version < 1:
+        # Migración a versión 1: Estructura inicial ya creada en init_db
+        current_version = 1
+    
+    if current_version < 2:
+        # Migración a versión 2: Añadir nuevos campos a style_profiles
+        cursor.execute('ALTER TABLE style_profiles ADD COLUMN text_color TEXT DEFAULT "#000000"')
+        cursor.execute('ALTER TABLE style_profiles ADD COLUMN background_color TEXT DEFAULT "#FFFFFF"')
+        cursor.execute('ALTER TABLE style_profiles ADD COLUMN alignment TEXT DEFAULT "left"')
+        cursor.execute('ALTER TABLE style_profiles ADD COLUMN line_spacing REAL DEFAULT 1.33')
+        cursor.execute('ALTER TABLE style_profiles ADD COLUMN document_purpose TEXT DEFAULT "general"')
+        cursor.execute('ALTER TABLE style_profiles ADD COLUMN confidence_scores TEXT DEFAULT "{}"')
+        current_version = 2
+    
+    # Actualizar la versión del esquema
+    cursor.execute('UPDATE schema_version SET version = ? WHERE id = 1', (CURRENT_SCHEMA_VERSION,))
+    conn.commit()
+    conn.close()
+
+# Ejecutar la inicialización y migración de la base de datos al iniciar la aplicación
 init_db()
+migrate_db()
 
 # Cache para respuestas, sesiones y vistas previas HTML
 response_cache = {}
@@ -101,7 +152,13 @@ def get_default_style_profile():
         'font_size': 12,
         'tone': 'neutral',
         'margins': {'top': 1, 'bottom': 1, 'left': 1, 'right': 1},
-        'structure': ['paragraphs']
+        'structure': ['paragraphs'],
+        'text_color': '#000000',
+        'background_color': '#FFFFFF',
+        'alignment': 'left',
+        'line_spacing': 1.33,
+        'document_purpose': 'general',
+        'confidence_scores': {'font_name': 1.0, 'font_size': 1.0, 'tone': 0.8, 'margins': 1.0, 'structure': 0.8, 'text_color': 1.0, 'background_color': 1.0, 'alignment': 0.9, 'line_spacing': 0.9, 'document_purpose': 0.7}
     }
 
 def parse_markdown_to_reportlab(text, style_profile=None):
@@ -110,11 +167,30 @@ def parse_markdown_to_reportlab(text, style_profile=None):
     style_profile = style_profile or get_default_style_profile()
     font_name = style_profile['font_name']
     font_size = style_profile['font_size']
+    alignment = {'left': 0, 'center': 1, 'right': 2, 'justified': 4}.get(style_profile['alignment'], 0)
+    line_spacing = style_profile['line_spacing']
+    text_color = colors.HexColor(style_profile['text_color'])
+    background_color = colors.HexColor(style_profile['background_color'])
+    
     body_style = ParagraphStyle(
-        name='Body', fontSize=font_size, leading=font_size * 1.33, spaceAfter=8, fontName=font_name
+        name='Body',
+        fontSize=font_size,
+        leading=font_size * line_spacing,
+        spaceAfter=8,
+        fontName=font_name,
+        alignment=alignment,
+        textColor=text_color,
+        backColor=background_color
     )
     bold_style = ParagraphStyle(
-        name='Bold', fontSize=font_size, leading=font_size * 1.33, spaceAfter=8, fontName=f'{font_name}-Bold'
+        name='Bold',
+        fontSize=font_size,
+        leading=font_size * line_spacing,
+        spaceAfter=8,
+        fontName=f'{font_name}-Bold',
+        alignment=alignment,
+        textColor=text_color,
+        backColor=background_color
     )
     elements = []
 
@@ -134,6 +210,9 @@ def parse_markdown_to_reportlab(text, style_profile=None):
                 ('FONTNAME', (0, 0), (-1, -1), font_name),
                 ('FONTSIZE', (0, 0), (-1, -1), font_size),
                 ('GRID', (0, 0), (-1, -1), 1, colors.black),
+                ('LEADING', (0, 0), (-1, -1), font_size * line_spacing),
+                ('TEXTCOLOR', (0, 0), (-1, -1), text_color),
+                ('BACKCOLOR', (0, 0), (-1, -1), background_color),
             ]))
             elements.append(table)
             elements.append(Spacer(1, 0.2 * inch))
@@ -152,47 +231,191 @@ def parse_markdown_to_reportlab(text, style_profile=None):
     return elements
 
 def analyze_document(file):
-    """Analiza un documento subido para extraer estilo, formato y tipografía."""
+    """Analiza un documento subido para extraer estilo, formato y tipografía con mayor precisión."""
     style_profile = {
         'font_name': 'Helvetica',
         'font_size': 12,
         'margins': {'top': 1, 'bottom': 1, 'left': 1, 'right': 1},
         'tone': 'neutral',
-        'structure': []
+        'structure': [],
+        'text_color': '#000000',
+        'background_color': '#FFFFFF',
+        'alignment': 'left',
+        'line_spacing': 1.33,
+        'document_purpose': 'general',
+        'confidence_scores': {
+            'font_name': 0.8,
+            'font_size': 0.8,
+            'tone': 0.7,
+            'margins': 0.8,
+            'structure': 0.7,
+            'text_color': 0.8,
+            'background_color': 0.8,
+            'alignment': 0.7,
+            'line_spacing': 0.7,
+            'document_purpose': 0.6
+        }
     }
     
     content = ""
     if file.filename.endswith('.pdf'):
         with pdfplumber.open(file) as pdf:
+            font_names = []
+            font_sizes = []
+            margins = {'top': [], 'bottom': [], 'left': [], 'right': []}
+            text_colors = []
+            alignments = []
+            line_spacings = []
+            structures = set()
+            
             for page in pdf.pages:
+                # Extraer texto
                 content += page.extract_text() or ""
+                
+                # Analizar caracteres para fuentes, tamaños y colores
                 chars = page.chars
                 if chars:
-                    style_profile['font_name'] = chars[0].get('fontname', 'Helvetica').split('-')[0]
-                    style_profile['font_size'] = round(chars[0].get('size', 12))
-                style_profile['margins'] = {
-                    'top': page.bbox[3] - page.chars[-1]['y1'] if page.chars else 1,
-                    'bottom': page.chars[0]['y0'] - page.bbox[1] if page.chars else 1,
-                    'left': page.chars[0]['x0'] - page.bbox[0] if page.chars else 1,
-                    'right': page.bbox[2] - page.chars[-1]['x1'] if page.chars else 1
-                }
+                    font_names.extend([char.get('fontname', 'Helvetica').split('-')[0] for char in chars])
+                    font_sizes.extend([round(char.get('size', 12)) for char in chars])
+                    text_colors.extend([char.get('non_stroking_color', (0, 0, 0)) for char in chars])
+                
+                # Calcular márgenes
+                if page.chars:
+                    margins['top'].append(page.bbox[3] - max(c['y1'] for c in page.chars))
+                    margins['bottom'].append(min(c['y0'] for c in page.chars) - page.bbox[1])
+                    margins['left'].append(min(c['x0'] for c in page.chars) - page.bbox[0])
+                    margins['right'].append(page.bbox[2] - max(c['x1'] for c in page.chars))
+                
+                # Detectar alineación y espaciado
+                if page.extract_text():
+                    lines = page.extract_text().split('\n')
+                    for i in range(len(lines)-1):
+                        try:
+                            y0 = page.chars[i]['y0']
+                            y1 = page.chars[i+1]['y0']
+                            spacing = (y0 - y1) / page.chars[i].get('size', 12)
+                            if spacing > 0:
+                                line_spacings.append(spacing)
+                        except IndexError:
+                            continue
+                    
+                    # Estimar alineación basada en posiciones x
+                    x_positions = [c['x0'] for c in page.chars]
+                    if x_positions:
+                        x_variance = statistics.variance(x_positions) if len(x_positions) > 1 else 0
+                        if x_variance < 10:
+                            alignments.append('justified' if max(x_positions) - min(x_positions) > page.width * 0.8 else 'left')
+                        elif max(x_positions) > page.width * 0.9:
+                            alignments.append('right')
+                        elif abs(max(x_positions) + min(x_positions) - page.width) < page.width * 0.1:
+                            alignments.append('center')
+                
+                # Detectar estructuras
+                if page.extract_tables():
+                    structures.add('tables')
+                if page.extract_text():
+                    text = page.extract_text()
+                    if re.search(r'^\s*[-*]\s+', text, re.MULTILINE):
+                        structures.add('lists')
+                    if re.search(r'^(#+)\s+', text, re.MULTILINE):
+                        structures.add('headings')
+                    if re.search(r'\n\n+', text):
+                        structures.add('paragraphs')
+            
+            # Normalizar y calcular valores dominantes
+            if font_names:
+                font_counter = Counter(font_names)
+                style_profile['font_name'] = font_counter.most_common(1)[0][0]
+                style_profile['confidence_scores']['font_name'] = font_counter.most_common(1)[0][1] / len(font_names)
+            
+            if font_sizes:
+                size_counter = Counter(font_sizes)
+                style_profile['font_size'] = size_counter.most_common(1)[0][0]
+                style_profile['confidence_scores']['font_size'] = size_counter.most_common(1)[0][1] / len(font_sizes)
+            
+            if margins['top']:
+                for key in margins:
+                    style_profile['margins'][key] = statistics.mean(margins[key]) / 72  # Convertir a pulgadas
+                    style_profile['confidence_scores']['margins'] = min(1.0, len(margins[key]) / len(pdf.pages))
+            
+            if text_colors:
+                color_counter = Counter([tuple(c) if isinstance(c, (list, tuple)) else c for c in text_colors])
+                dominant_color = color_counter.most_common(1)[0][0]
+                if isinstance(dominant_color, (list, tuple)):
+                    style_profile['text_color'] = '#{:02x}{:02x}{:02x}'.format(
+                        int(dominant_color[0] * 255), int(dominant_color[1] * 255), int(dominant_color[2] * 255)
+                    )
+                style_profile['confidence_scores']['text_color'] = color_counter.most_common(1)[0][1] / len(text_colors)
+            
+            if alignments:
+                alignment_counter = Counter(alignments)
+                style_profile['alignment'] = alignment_counter.most_common(1)[0][0]
+                style_profile['confidence_scores']['alignment'] = alignment_counter.most_common(1)[0][1] / len(alignments)
+            
+            if line_spacings:
+                style_profile['line_spacing'] = min(max(statistics.mean(line_spacings), 1.0), 2.0)
+                style_profile['confidence_scores']['line_spacing'] = len(line_spacings) / len(pdf.pages)
+            
+            style_profile['structure'] = list(structures)
+            style_profile['confidence_scores']['structure'] = 0.9 if structures else 0.7
+            
+            # Asumir fondo blanco (PDFs no siempre proporcionan esta información)
+            style_profile['background_color'] = '#FFFFFF'
+            style_profile['confidence_scores']['background_color'] = 0.9
+        
     elif file.filename.endswith('.txt'):
-        content = file.read().decode('utf-8')
+        content = file.read().decode('utf-8', errors='ignore')
+        structures = set()
+        
+        # Detectar estructuras en TXT
+        if re.search(r'^\s*[-*]\s+', content, re.MULTILINE):
+            structures.add('lists')
+        if re.search(r'^\s*[A-Z].*\n[-=]+', content, re.MULTILINE):
+            structures.add('headings')
+        if re.search(r'\n\n+', content):
+            structures.add('paragraphs')
+        if re.search(r'^\s*\|.*\|\s*$', content, re.MULTILINE):
+            structures.add('tables')
+        
+        style_profile['structure'] = list(structures)
+        style_profile['confidence_scores']['structure'] = 0.8 if structures else 0.6
     
-    try:
-        response = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": "Analiza el tono (formal, informal, técnico) y la estructura (encabezados, párrafos, listas, tablas) del siguiente texto. Devuelve un JSON con 'tone' y 'structure'."},
-                {"role": "user", "content": content[:4000]}
-            ],
-            max_tokens=500
-        )
-        analysis = json.loads(response.choices[0].message.content)
-        style_profile['tone'] = analysis.get('tone', 'neutral')
-        style_profile['structure'] = analysis.get('structure', [])
-    except Exception as e:
-        print(f"Error en análisis de tono: {e}")
+    # Analizar tono y propósito con OpenAI
+    if content:
+        try:
+            response = client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": """
+                        Analiza el texto proporcionado y devuelve un JSON con:
+                        - 'tone': tono del texto (e.g., formal, informal, técnico, académico, persuasivo, narrativo).
+                        - 'document_purpose': propósito del documento (e.g., informe, carta, manual, artículo, presentación).
+                        - 'confidence': confianza en la predicción (0.0 a 1.0).
+                        Usa el contexto y vocabulario para determinar el tono y propósito.
+                        """
+                    },
+                    {"role": "user", "content": content[:4000]}
+                ],
+                max_tokens=500
+            )
+            analysis = json.loads(response.choices[0].message.content)
+            style_profile['tone'] = analysis.get('tone', 'neutral')
+            style_profile['document_purpose'] = analysis.get('document_purpose', 'general')
+            style_profile['confidence_scores']['tone'] = analysis.get('confidence', 0.7)
+            style_profile['confidence_scores']['document_purpose'] = analysis.get('confidence', 0.7)
+        except Exception as e:
+            print(f"Error en análisis de tono: {e}")
+    
+    # Normalizar fuentes a las soportadas por ReportLab
+    font_mapping = {
+        'Times New Roman': 'Times-Roman',
+        'Arial': 'Helvetica',
+        'Courier New': 'Courier',
+        # Agregar más según sea necesario
+    }
+    style_profile['font_name'] = font_mapping.get(style_profile['font_name'], style_profile['font_name'])
     
     return style_profile, content
 
@@ -274,8 +497,9 @@ def generate_document():
         cache_key = f"{current_user.id}:{session_id}:{prompt}:{doc_type}:{tone}:{length}:{language}:{style_profile_id}"
         if cache_key in response_cache:
             return jsonify({
-                'document': response_cache[cache_key],
-                'content_type': 'html' if doc_type == 'html' or 'html' in prompt.lower() else 'pdf'
+                'document': response_cache[cache_key]['document'],
+                'content_type': response_cache[cache_key]['content_type'],
+                'includes_css': response_cache[cache_key].get('includes_css', False)
             })
 
         if session_id not in session_messages:
@@ -288,6 +512,9 @@ def generate_document():
         
         # Detectar si el prompt solicita HTML
         is_html = doc_type == 'html' or re.search(r'\b(html|página web|sitio web)\b', prompt, re.IGNORECASE) is not None
+        
+        # Detectar si el prompt solicita CSS explícitamente
+        requests_css = re.search(r'\b(css|estilo|diseño|con estilo)\b', prompt, re.IGNORECASE) is not None
         
         if is_explanatory:
             system_prompt = f"""
@@ -319,20 +546,45 @@ def generate_document():
             - Considera el contexto de los mensajes anteriores para mantener coherencia en la conversación.
             """
         elif is_html:
-            system_prompt = f"""
-            Eres GarBotGPT, un asistente que genera páginas web en formato HTML con CSS y JavaScript si es necesario.
-            - Tipo de documento: página web (HTML).
-            - Tono: {tone} (formal, informal, técnico).
-            - Longitud: {length} (corto: ~100 líneas, medio: ~300 líneas, largo: ~600 líneas).
-            - Idioma: {language} (e.g., es para español, en para inglés, fr para francés).
-            - Genera código HTML completo con:
-              - Estructura semántica (<header>, <main>, <footer>, etc.).
-              - Estilos CSS internos (en <style>) adaptados al tono y propósito.
-              - JavaScript opcional (en <script>) si el prompt lo requiere.
-              - Usa un diseño responsivo y moderno.
-            - Estilo: {style_profile}.
-            - Considera el contexto de los mensajes anteriores para mantener coherencia.
-            """
+            if requests_css:
+                system_prompt = f"""
+                Eres GarBotGPT, un asistente que genera páginas web completas en formato HTML con CSS embebido.
+                - Tipo de documento: página web (HTML con CSS).
+                - Tono: {tone} (formal, informal, técnico).
+                - Longitud: {length} (corto: ~100 líneas, medio: ~300 líneas, largo: ~600 líneas).
+                - Idioma: {language} (e.g., es para español, en para inglés, fr para francés).
+                - Genera un archivo HTML completo autocontenido con:
+                  - Estructura semántica completa (<header>, <nav>, <main>, <section>, <footer>, etc.).
+                  - Metaetiquetas esenciales (<meta charset="UTF-8">, viewport, title).
+                  - Estilos CSS embebidos dentro de una etiqueta <style> (NO uses enlaces a archivos CSS externos).
+                    - Diseño responsivo usando flexbox o grid.
+                    - Paleta de colores moderna y coherente.
+                    - Soporte para temas claro y oscuro usando variables CSS (--variable-name).
+                    - Transiciones y animaciones suaves para interactividad (e.g., hover effects).
+                    - Tipografía profesional (usar fuentes de Google Fonts si es necesario, e.g., 'Roboto', importadas via @import).
+                    - Sombras, bordes redondeados y otros efectos visuales modernos.
+                    - Accesibilidad (ARIA roles, contraste adecuado).
+                  - JavaScript opcional (en <script>) si el prompt lo requiere.
+                - Asegúrate de que el CSS esté bien organizado y comentado dentro de <style>.
+                - Estilo: {style_profile}.
+                - Considera el contexto de los mensajes anteriores para mantener coherencia.
+                """
+            else:
+                system_prompt = f"""
+                Eres GarBotGPT, un asistente que genera páginas web en formato HTML sin CSS.
+                - Tipo de documento: página web (solo HTML).
+                - Tono: {tone} (formal, informal, técnico).
+                - Longitud: {length} (corto: ~100 líneas, medio: ~300 líneas, largo: ~600 líneas).
+                - Idioma: {language} (e.g., es para español, en para inglés, fr para francés).
+                - Genera código HTML completo con:
+                  - Estructura semántica (<header>, <main>, <footer>, etc.).
+                  - Metaetiquetas esenciales (<meta charset="UTF-8">, viewport, title).
+                  - No incluyas CSS ni estilos inline a menos que se indique explícitamente.
+                  - JavaScript opcional (en <script>) si el prompt lo requiere.
+                - Asegúrate de que el HTML sea válido y semántico.
+                - Estilo: {style_profile}.
+                - Considera el contexto de los mensajes anteriores para mantener coherencia.
+                """
         else:
             system_prompt = f"""
             Eres GarBotGPT, un asistente que genera documentos profesionales en formato Markdown.
@@ -352,19 +604,24 @@ def generate_document():
         response = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=messages,
-            max_tokens=1000,
+            max_tokens=1500,  # Aumentado para permitir CSS detallado
             temperature=0.7
         )
 
         document = response.choices[0].message.content
-        response_cache[cache_key] = document
+        response_cache[cache_key] = {
+            'document': document,
+            'content_type': 'html' if is_html else 'pdf',
+            'includes_css': requests_css if is_html else False
+        }
 
         session_messages[session_id].append({"role": "user", "content": prompt})
         session_messages[session_id].append({"role": "assistant", "content": document})
 
         return jsonify({
             'document': document,
-            'content_type': 'html' if is_html else 'pdf'
+            'content_type': 'html' if is_html else 'pdf',
+            'includes_css': requests_css if is_html else False
         })
     except openai.AuthenticationError:
         return jsonify({'error': 'Error de autenticación con OpenAI. Verifica la clave API.'}), 401
@@ -388,7 +645,13 @@ def get_style_profile(profile_id):
             'font_size': profile['font_size'],
             'tone': profile['tone'],
             'margins': json.loads(profile['margins']),
-            'structure': json.loads(profile['structure'])
+            'structure': json.loads(profile['structure']),
+            'text_color': profile['text_color'],
+            'background_color': profile['background_color'],
+            'alignment': profile['alignment'],
+            'line_spacing': profile['line_spacing'],
+            'document_purpose': profile['document_purpose'],
+            'confidence_scores': json.loads(profile['confidence_scores'])
         }
     return get_default_style_profile()
 
@@ -400,14 +663,19 @@ def generate_preview():
         content = data.get('content', '')
         content_type = data.get('content_type', 'pdf')
         style_profile_id = data.get('style_profile_id', None)
+        includes_css = data.get('includes_css', False)
         if not content:
             return jsonify({'error': 'El contenido está vacío'}), 400
 
         if content_type == 'html':
-            # Almacenar el contenido HTML temporalmente
-            preview_id = f"{current_user.id}:{datetime.now().timestamp()}"
+            # Generar un ID único para la vista previa
+            preview_id = f"{current_user.id}:{uuid.uuid4()}"
             html_previews[preview_id] = content
-            return jsonify({'preview_id': preview_id, 'content_type': 'html'})
+            return jsonify({
+                'preview_id': preview_id,
+                'content_type': 'html',
+                'includes_css': includes_css
+            })
         
         # Generar PDF
         buffer = BytesIO()
@@ -446,9 +714,17 @@ def generate_preview():
 @app.route('/preview_html/<preview_id>', methods=['GET'])
 @login_required
 def preview_html(preview_id):
-    """Sirve el contenido HTML para la vista previa."""
+    """Sirve el contenido HTML para la vista previa como una página renderizable."""
     if preview_id in html_previews and preview_id.startswith(f"{current_user.id}:"):
-        return Response(html_previews[preview_id], mimetype='text/html')
+        # Asegurarse de que el contenido sea un HTML válido
+        html_content = html_previews[preview_id]
+        if not html_content.strip().startswith('<!DOCTYPE html>'):
+            html_content = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+<body>{html_content}</body>
+</html>"""
+        return Response(html_content, mimetype='text/html')
     return jsonify({'error': 'Vista previa no encontrada'}), 404
 
 @app.route('/analyze_document', methods=['POST'])
@@ -467,15 +743,23 @@ def analyze_document_endpoint():
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute('''
-            INSERT INTO style_profiles (user_id, font_name, font_size, tone, margins, structure)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO style_profiles (
+                user_id, font_name, font_size, tone, margins, structure, 
+                text_color, background_color, alignment, line_spacing, document_purpose, confidence_scores
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             current_user.id,
             style_profile['font_name'],
             style_profile['font_size'],
             style_profile['tone'],
             json.dumps(style_profile['margins']),
-            json.dumps(style_profile['structure'])
+            json.dumps(style_profile['structure']),
+            style_profile['text_color'],
+            style_profile['background_color'],
+            style_profile['alignment'],
+            style_profile['line_spacing'],
+            style_profile['document_purpose'],
+            json.dumps(style_profile['confidence_scores'])
         ))
         profile_id = cursor.lastrowid
         conn.commit()
@@ -505,7 +789,13 @@ def get_style_profiles():
             'font_size': profile['font_size'],
             'tone': profile['tone'],
             'margins': json.loads(profile['margins']),
-            'structure': json.loads(profile['structure'])
+            'structure': json.loads(profile['structure']),
+            'text_color': profile['text_color'],
+            'background_color': profile['background_color'],
+            'alignment': profile['alignment'],
+            'line_spacing': profile['line_spacing'],
+            'document_purpose': profile['document_purpose'],
+            'confidence_scores': json.loads(profile['confidence_scores'])
         }
     
     return jsonify(result)
