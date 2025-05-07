@@ -27,6 +27,7 @@ client = openai.OpenAI(api_key=openai_api_key)
 # Cache para respuestas y estilos
 response_cache = {}
 style_profiles = {}
+session_messages = {}  # Almacena mensajes por sesión
 
 def parse_markdown_to_reportlab(text, style_profile=None):
     """Convierte Markdown a elementos de reportlab con soporte para estilos personalizados."""
@@ -137,7 +138,8 @@ def generate_document():
         length = data.get('length', 'medium')
         language = data.get('language', 'es')
         style_profile_id = data.get('style_profile_id', None)
-        
+        message_history = data.get('message_history', [])  # Historial de mensajes
+
         if not prompt:
             return jsonify({'error': 'El prompt está vacío'}), 400
 
@@ -146,29 +148,43 @@ def generate_document():
         if cache_key in response_cache:
             return jsonify({'document': response_cache[cache_key]})
 
-        # Construir prompt avanzado
+        # Inicializar historial de mensajes para la sesión si no existe
+        if session_id not in session_messages:
+            session_messages[session_id] = []
+
+        # Construir mensajes para OpenAI
         system_prompt = f"""
-        Eres un asistente que genera documentos profesionales en formato Markdown. 
+        Eres GarBotGPT, un asistente que genera documentos profesionales en formato Markdown. 
         - Tipo de documento: {doc_type} (e.g., carta formal, informe, correo, contrato, currículum).
         - Tono: {tone} (formal, informal, técnico).
         - Longitud: {length} (corto: ~100 palabras, medio: ~300 palabras, largo: ~600 palabras).
         - Idioma: {language} (e.g., es para español, en para inglés, fr para francés).
         - Usa encabezados (#, ##), listas (-), negritas (**), y tablas (|...|) cuando sea apropiado.
         - Si se proporciona un estilo, síguelo: {style_profiles.get(style_profile_id, {}) if style_profile_id else 'ninguno'}.
+        - Considera el contexto de los mensajes anteriores para mantener coherencia en la conversación.
         """
         
+        # Combinar historial recibido con el nuevo mensaje
+        messages = [{"role": "system", "content": system_prompt}]
+        # Limitar historial a los últimos 10 mensajes para evitar exceso de tokens
+        messages.extend(message_history[-10:])
+        messages.append({"role": "user", "content": prompt})
+
+        # Llamada a la API de OpenAI
         response = client.chat.completions.create(
             model="gpt-3.5-turbo",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": prompt}
-            ],
+            messages=messages,
             max_tokens=1000,
             temperature=0.7
         )
 
         document = response.choices[0].message.content
         response_cache[cache_key] = document
+
+        # Guardar mensajes en el historial de la sesión
+        session_messages[session_id].append({"role": "user", "content": prompt})
+        session_messages[session_id].append({"role": "assistant", "content": document})
+
         return jsonify({'document': document})
     except openai.AuthenticationError:
         return jsonify({'error': 'Error de autenticación con OpenAI. Verifica la clave API.'}), 401
@@ -204,7 +220,7 @@ def generate_pdf():
 
         # Elementos del PDF
         story = []
-        story.append(Paragraph("Documento Generado por IA", title_style))
+        story.append(Paragraph("Documento Generado por GarBotGPT", title_style))
         story.append(Paragraph(f"Fecha: {datetime.now().strftime('%d/%m/%Y %H:%M')}", subtitle_style))
         story.append(Spacer(1, 0.3 * inch))
         
