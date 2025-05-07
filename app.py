@@ -1,4 +1,4 @@
-from flask import Flask, render_template, request, jsonify, send_file, redirect, url_for, flash
+from flask import Flask, render_template, request, jsonify, send_file, redirect, url_for, flash, Response
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from dotenv import load_dotenv
 import openai
@@ -84,9 +84,10 @@ def init_db():
 # Ejecutar la inicialización de la base de datos al iniciar la aplicación
 init_db()
 
-# Cache para respuestas y sesiones
+# Cache para respuestas, sesiones y vistas previas HTML
 response_cache = {}
 session_messages = {}  # Almacena mensajes por sesión
+html_previews = {}  # Almacena contenido HTML temporal para vistas previas
 
 def get_db_connection():
     conn = sqlite3.connect('profiles.db')
@@ -272,7 +273,10 @@ def generate_document():
 
         cache_key = f"{current_user.id}:{session_id}:{prompt}:{doc_type}:{tone}:{length}:{language}:{style_profile_id}"
         if cache_key in response_cache:
-            return jsonify({'document': response_cache[cache_key]})
+            return jsonify({
+                'document': response_cache[cache_key],
+                'content_type': 'html' if doc_type == 'html' or 'html' in prompt.lower() else 'pdf'
+            })
 
         if session_id not in session_messages:
             session_messages[session_id] = []
@@ -281,6 +285,9 @@ def generate_document():
         
         # Detectar si el prompt requiere una explicación estructurada
         is_explanatory = re.search(r'^(¿Quién es|¿Qué es|explicar|detallar)\b', prompt, re.IGNORECASE) is not None
+        
+        # Detectar si el prompt solicita HTML
+        is_html = doc_type == 'html' or re.search(r'\b(html|página web|sitio web)\b', prompt, re.IGNORECASE) is not None
         
         if is_explanatory:
             system_prompt = f"""
@@ -311,6 +318,21 @@ def generate_document():
             - Estilo: {style_profile}.
             - Considera el contexto de los mensajes anteriores para mantener coherencia en la conversación.
             """
+        elif is_html:
+            system_prompt = f"""
+            Eres GarBotGPT, un asistente que genera páginas web en formato HTML con CSS y JavaScript si es necesario.
+            - Tipo de documento: página web (HTML).
+            - Tono: {tone} (formal, informal, técnico).
+            - Longitud: {length} (corto: ~100 líneas, medio: ~300 líneas, largo: ~600 líneas).
+            - Idioma: {language} (e.g., es para español, en para inglés, fr para francés).
+            - Genera código HTML completo con:
+              - Estructura semántica (<header>, <main>, <footer>, etc.).
+              - Estilos CSS internos (en <style>) adaptados al tono y propósito.
+              - JavaScript opcional (en <script>) si el prompt lo requiere.
+              - Usa un diseño responsivo y moderno.
+            - Estilo: {style_profile}.
+            - Considera el contexto de los mensajes anteriores para mantener coherencia.
+            """
         else:
             system_prompt = f"""
             Eres GarBotGPT, un asistente que genera documentos profesionales en formato Markdown.
@@ -340,7 +362,10 @@ def generate_document():
         session_messages[session_id].append({"role": "user", "content": prompt})
         session_messages[session_id].append({"role": "assistant", "content": document})
 
-        return jsonify({'document': document})
+        return jsonify({
+            'document': document,
+            'content_type': 'html' if is_html else 'pdf'
+        })
     except openai.AuthenticationError:
         return jsonify({'error': 'Error de autenticación con OpenAI. Verifica la clave API.'}), 401
     except openai.RateLimitError:
@@ -367,16 +392,24 @@ def get_style_profile(profile_id):
         }
     return get_default_style_profile()
 
-@app.route('/generate_pdf', methods=['POST'])
+@app.route('/generate_preview', methods=['POST'])
 @login_required
-def generate_pdf():
+def generate_preview():
     try:
         data = request.json
         content = data.get('content', '')
+        content_type = data.get('content_type', 'pdf')
         style_profile_id = data.get('style_profile_id', None)
         if not content:
             return jsonify({'error': 'El contenido está vacío'}), 400
 
+        if content_type == 'html':
+            # Almacenar el contenido HTML temporalmente
+            preview_id = f"{current_user.id}:{datetime.now().timestamp()}"
+            html_previews[preview_id] = content
+            return jsonify({'preview_id': preview_id, 'content_type': 'html'})
+        
+        # Generar PDF
         buffer = BytesIO()
         doc = SimpleDocTemplate(
             buffer, 
@@ -409,6 +442,14 @@ def generate_pdf():
         )
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+@app.route('/preview_html/<preview_id>', methods=['GET'])
+@login_required
+def preview_html(preview_id):
+    """Sirve el contenido HTML para la vista previa."""
+    if preview_id in html_previews and preview_id.startswith(f"{current_user.id}:"):
+        return Response(html_previews[preview_id], mimetype='text/html')
+    return jsonify({'error': 'Vista previa no encontrada'}), 404
 
 @app.route('/analyze_document', methods=['POST'])
 @login_required
