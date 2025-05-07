@@ -3,7 +3,7 @@ from dotenv import load_dotenv
 import openai
 import os
 from reportlab.lib.pagesizes import letter
-from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Image
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
 from io import BytesIO
@@ -14,7 +14,12 @@ app = Flask(__name__)
 
 # Cargar variables de entorno
 load_dotenv()
-openai.api_key = os.getenv("OPENAI_API_KEY")
+openai_api_key = os.getenv("OPENAI_API_KEY")
+if not openai_api_key:
+    raise ValueError("OPENAI_API_KEY no está configurada en las variables de entorno")
+
+# Configurar cliente OpenAI
+client = openai.OpenAI(api_key=openai_api_key)
 
 # Cache para respuestas frecuentes
 response_cache = {}
@@ -59,8 +64,8 @@ def generate_document():
         if cache_key in response_cache:
             return jsonify({'document': response_cache[cache_key]})
 
-        # Llamada a la API de OpenAI
-        response = openai.ChatCompletion.create(
+        # Llamada a la API de OpenAI (nueva interfaz)
+        response = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
                 {"role": "system", "content": "Eres un asistente que genera documentos claros y profesionales en formato Markdown. Usa listas, negritas y encabezados cuando sea apropiado."},
@@ -73,6 +78,10 @@ def generate_document():
         document = response.choices[0].message.content
         response_cache[cache_key] = document
         return jsonify({'document': document})
+    except openai.AuthenticationError:
+        return jsonify({'error': 'Error de autenticación con OpenAI. Verifica la clave API.'}), 401
+    except openai.RateLimitError:
+        return jsonify({'error': 'Límite de solicitudes alcanzado. Intenta de nuevo más tarde.'}), 429
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
