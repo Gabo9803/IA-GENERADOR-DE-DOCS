@@ -5,7 +5,7 @@ import traceback
 app = Flask(__name__)
 
 # 🔐 Introdueix aquí la teva clau secreta d'OpenAI (NO recomanat en producció)
-api_key = "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"
+api_key = "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"
 
 # Inicialització del client OpenAI
 client = OpenAI(api_key=api_key)
