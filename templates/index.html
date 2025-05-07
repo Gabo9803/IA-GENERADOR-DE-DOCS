@@ -592,7 +592,7 @@
                 padding: 12px 18px;
             }
 
-            .textarea {
+            textarea {
                 min-height: 50px;
                 font-size: 0.95rem;
             }
@@ -639,6 +639,10 @@
                 <option value="es">Español</option>
                 <option value="en">Inglés</option>
                 <option value="fr">Francés</option>
+            </select>
+            <select id="model">
+                <option value="gpt-3.5-turbo">GPT-3.5-Turbo</option>
+                <option value="gpt-4o">GPT-4o</option>
             </select>
             <h3>Perfiles de Estilo</h3>
             <select id="styleProfile">
@@ -966,6 +970,7 @@
                 const length = document.getElementById('length').value;
                 const language = document.getElementById('language').value;
                 const styleProfile = document.getElementById('styleProfile').value || null;
+                const model = document.getElementById('model').value;
 
                 // Preparar historial de mensajes
                 const messageHistory = (sessions[currentSessionId]?.messages || []).map(msg => ({
@@ -984,7 +989,8 @@
                         length, 
                         language, 
                         style_profile_id: styleProfile,
-                        message_history: messageHistory
+                        message_history: messageHistory,
+                        model // Añadir el modelo seleccionado
                     })
                 });
                 progressBar.style.width = '100%';
