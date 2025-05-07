@@ -3,38 +3,38 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Generador de Documentos - Chat IA</title>
+    <title>GarBotGPT</title>
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap">
     <style>
         :root {
             --bg-color: #e5e7eb;
-            --container-bg: #ffffff;
+            --container-bg: rgba(255, 255, 255, 0.15);
             --text-color: #111827;
-            --user-bg: #3b82f6;
-            --ai-bg: #f3f4f6;
-            --input-bg: #ffffff;
-            --border-color: #d1d5db;
+            --user-bg: rgba(59, 130, 246, 0.8);
+            --ai-bg: rgba(243, 244, 246, 0.8);
+            --input-bg: rgba(255, 255, 255, 0.2);
+            --border-color: rgba(209, 213, 219, 0.5);
             --accent-color: #3b82f6;
-            --shadow: 0 8px 24px rgba(0, 0, 0, 0.15);
-            --toast-bg: #1f2937;
+            --shadow: 0 8px 24px rgba(0, 0, 0, 0.1);
+            --toast-bg: rgba(31, 41, 55, 0.9);
             --toast-text: #ffffff;
-            --sidebar-bg: #f9fafb;
+            --sidebar-bg: rgba(249, 250, 251, 0.15);
             --sidebar-text: #111827;
         }
 
         [data-theme="dark"] {
             --bg-color: #111827;
-            --container-bg: #1f2937;
+            --container-bg: rgba(31, 41, 55, 0.15);
             --text-color: #e5e7eb;
-            --user-bg: #60a5fa;
-            --ai-bg: #374151;
-            --input-bg: #374151;
-            --border-color: #4b5563;
+            --user-bg: rgba(96, 165, 250, 0.8);
+            --ai-bg: rgba(55, 65, 81, 0.8);
+            --input-bg: rgba(55, 65, 81, 0.2);
+            --border-color: rgba(75, 85, 99, 0.5);
             --accent-color: #60a5fa;
-            --shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
-            --toast-bg: #e5e7eb;
+            --shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+            --toast-bg: rgba(229, 231, 235, 0.9);
             --toast-text: #111827;
-            --sidebar-bg: #1f2937;
+            --sidebar-bg: rgba(31, 41, 55, 0.15);
             --sidebar-text: #e5e7eb;
         }
 
@@ -57,8 +57,6 @@
             display: flex;
             width: 100vw;
             height: 100vh;
-            background: var(--container-bg);
-            box-shadow: var(--shadow);
             overflow: hidden;
         }
 
@@ -71,10 +69,24 @@
             flex-direction: column;
             gap: 15px;
             transition: transform 0.3s ease;
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border-right: 1px solid var(--border-color);
         }
 
         .sidebar.hidden {
             transform: translateX(-100%);
+        }
+
+        .main {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            transition: all 0.3s ease;
+        }
+
+        .sidebar.hidden ~ .main {
+            width: 100vw;
         }
 
         .sidebar-header {
@@ -104,6 +116,8 @@
             background: var(--input-bg);
             color: var(--text-color);
             font-size: 0.9rem;
+            backdrop-filter: blur(5px);
+            -webkit-backdrop-filter: blur(5px);
         }
 
         .session-list, .style-list {
@@ -119,6 +133,9 @@
             display: flex;
             justify-content: space-between;
             align-items: center;
+            background: var(--container-bg);
+            backdrop-filter: blur(5px);
+            -webkit-backdrop-filter: blur(5px);
         }
 
         .session-item:hover, .style-item:hover {
@@ -139,16 +156,13 @@
             text-align: center;
             border-radius: 8px;
             cursor: pointer;
+            background: var(--input-bg);
+            backdrop-filter: blur(5px);
+            -webkit-backdrop-filter: blur(5px);
         }
 
         .upload-area.dragover {
             background: var(--ai-bg);
-        }
-
-        .main {
-            flex: 1;
-            display: flex;
-            flex-direction: column;
         }
 
         .header {
@@ -158,6 +172,8 @@
             justify-content: space-between;
             align-items: center;
             background: var(--container-bg);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
         }
 
         .header h1 {
@@ -208,7 +224,7 @@
             display: flex;
             flex-direction: column;
             gap: 25px;
-            background: var(--container-bg);
+            background: transparent;
         }
 
         .message {
@@ -219,7 +235,9 @@
             font-size: 1rem;
             animation: slideIn 0.5s ease;
             position: relative;
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+            box-shadow: var(--shadow);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
         }
 
         .user-message {
@@ -272,6 +290,10 @@
             display: flex;
             align-items: center;
             gap: 6px;
+            background: var(--ai-bg);
+            border-radius: 18px;
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
         }
 
         .typing span {
@@ -291,6 +313,8 @@
             border-top: 1px solid var(--border-color);
             background: var(--container-bg);
             position: relative;
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
         }
 
         .input-group {
@@ -311,6 +335,8 @@
             font-size: 1rem;
             resize: none;
             transition: all 0.3s ease;
+            backdrop-filter: blur(5px);
+            -webkit-backdrop-filter: blur(5px);
         }
 
         textarea:focus {
@@ -329,7 +355,7 @@
             font-size: 1rem;
             font-weight: 600;
             transition: all 0.3s ease;
-            box-shadow: 0 6px 15px rgba(0, 0, 0, 0.2);
+            box-shadow: var(--shadow);
         }
 
         button.send:hover {
@@ -340,7 +366,7 @@
 
         button.send:active {
             transform: translateY(0);
-            box-shadow: 0 6px 15px rgba(0, 0, 0, 0.2);
+            box-shadow: var(--shadow);
         }
 
         .suggestions {
@@ -357,6 +383,8 @@
             cursor: pointer;
             font-size: 0.9rem;
             transition: all 0.3s ease;
+            backdrop-filter: blur(5px);
+            -webkit-backdrop-filter: blur(5px);
         }
 
         .suggestion:hover {
@@ -377,6 +405,8 @@
             display: flex;
             align-items: center;
             gap: 10px;
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
         }
 
         .modal {
@@ -401,6 +431,8 @@
             max-height: 90vh;
             overflow-y: auto;
             position: relative;
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
         }
 
         .modal-close {
@@ -523,6 +555,9 @@
                 <option value="fr">Francés</option>
             </select>
             <h3>Perfiles de Estilo</h3>
+            <select id="styleProfile">
+                <option value="">Ninguno</option>
+            </select>
             <div class="style-list" id="styleList"></div>
             <h3>Subir Documento</h3>
             <div class="upload-area" id="uploadArea">
@@ -533,7 +568,7 @@
         <div class="main">
             <div class="header">
                 <button class="sidebar-toggle" onclick="toggleSidebar()">☰</button>
-                <h1>Generador de Documentos - Chat IA</h1>
+                <h1>GarBotGPT</h1>
                 <div class="header-buttons">
                     <button class="new-session" onclick="newSession()"><span class="tooltip">Nueva sesión</span>📝</button>
                     <button class="export-chat" onclick="exportChat()"><span class="tooltip">Exportar chat</span>📤</button>
@@ -601,6 +636,8 @@
                 const response = await fetch('/style_profiles');
                 const profiles = await response.json();
                 styleList.innerHTML = '';
+                const styleSelect = document.getElementById('styleProfile');
+                styleSelect.innerHTML = '<option value="">Ninguno</option>';
                 Object.keys(profiles).forEach(id => {
                     const profile = profiles[id];
                     const item = document.createElement('div');
@@ -611,10 +648,14 @@
                     `;
                     item.onclick = (e) => {
                         if (e.target.tagName !== 'BUTTON') {
-                            document.getElementById('styleProfile').value = id;
+                            styleSelect.value = id;
                         }
                     };
                     styleList.appendChild(item);
+                    const option = document.createElement('option');
+                    option.value = id;
+                    option.textContent = `${profile.font_name} (${profile.tone})`;
+                    styleSelect.appendChild(option);
                 });
             } catch (error) {
                 showToast(`Error al cargar perfiles: ${error.message}`, 'error');
@@ -729,7 +770,7 @@
         function addTypingIndicator() {
             const typingDiv = document.createElement('div');
             typingDiv.className = 'typing';
-            typingDiv.innerHTML = 'IA está escribiendo <span></span><span></span><span></span>';
+            typingDiv.innerHTML = 'GarBotGPT está procesando contexto <span></span><span></span><span></span>';
             typingDiv.id = 'typingIndicator';
             chatArea.appendChild(typingDiv);
             chatArea.scrollTop = chatArea.scrollHeight;
@@ -756,7 +797,13 @@
                 const tone = document.getElementById('tone').value;
                 const length = document.getElementById('length').value;
                 const language = document.getElementById('language').value;
-                const styleProfile = document.getElementById('styleProfile')?.value || null;
+                const styleProfile = document.getElementById('styleProfile').value || null;
+
+                // Preparar historial de mensajes
+                const messageHistory = (sessions[currentSessionId]?.messages || []).map(msg => ({
+                    role: msg.isUser ? 'user' : 'assistant',
+                    content: msg.content
+                }));
 
                 const response = await fetch('/generate', {
                     method: 'POST',
@@ -768,7 +815,8 @@
                         tone, 
                         length, 
                         language, 
-                        style_profile_id: styleProfile 
+                        style_profile_id: styleProfile,
+                        message_history: messageHistory
                     })
                 });
                 progressBar.style.width = '100%';
@@ -802,7 +850,7 @@
         // Vista previa de PDF
         async function previewPDF(button) {
             const messageText = button.parentElement.previousElementSibling.textContent;
-            const styleProfile = document.getElementById('styleProfile')?.value || null;
+            const styleProfile = document.getElementById('styleProfile').value || null;
             try {
                 const response = await fetch('/generate_pdf', {
                     method: 'POST',
@@ -857,7 +905,7 @@
 
         // Exportar chat
         function exportChat() {
-            const messages = sessions[currentSessionId].messages.map(msg => `${msg.isUser ? 'Usuario' : 'IA'}: ${msg.content}`).join('\n\n');
+            const messages = sessions[currentSessionId].messages.map(msg => `${msg.isUser ? 'Usuario' : 'GarBotGPT'}: ${msg.content}`).join('\n\n');
             const blob = new Blob([messages], { type: 'text/plain' });
             const url = window.URL.createObjectURL(blob);
             const a = document.createElement('a');
@@ -963,12 +1011,6 @@
         loadSessions();
         loadStyleProfiles();
         loadSession(currentSessionId);
-
-        // Agregar select para perfiles de estilo
-        const styleSelect = document.createElement('select');
-        styleSelect.id = 'styleProfile';
-        styleSelect.innerHTML = '<option value="">Ninguno</option>';
-        document.querySelector('.sidebar').insertBefore(styleSelect, document.getElementById('styleList'));
     </script>
 </body>
 </html>
