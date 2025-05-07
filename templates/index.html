@@ -186,7 +186,7 @@
             gap: 15px;
         }
 
-        .theme-toggle, .clear-chat, .export-chat, .new-session {
+        .theme-toggle, .clear-chat, .export-chat, .new-session, .logout-button {
             background: none;
             border: none;
             cursor: pointer;
@@ -194,9 +194,12 @@
             color: var(--text-color);
             transition: all 0.3s ease;
             position: relative;
+            text-decoration: none;
+            display: flex;
+            align-items: center;
         }
 
-        .theme-toggle:hover, .clear-chat:hover, .export-chat:hover, .new-session:hover {
+        .theme-toggle:hover, .clear-chat:hover, .export-chat:hover, .new-session:hover, .logout-button:hover {
             color: var(--accent-color);
             transform: scale(1.15);
         }
@@ -213,7 +216,7 @@
             transition: opacity 0.3s ease;
         }
 
-        button:hover .tooltip {
+        .theme-toggle:hover .tooltip, .clear-chat:hover .tooltip, .export-chat:hover .tooltip, .new-session:hover .tooltip, .logout-button:hover .tooltip {
             opacity: 1;
         }
 
@@ -574,6 +577,7 @@
                     <button class="export-chat" onclick="exportChat()"><span class="tooltip">Exportar chat</span>📤</button>
                     <button class="clear-chat" onclick="clearChat()"><span class="tooltip">Limpiar chat</span>🗑️</button>
                     <button class="theme-toggle" onclick="toggleTheme()"><span class="tooltip">Cambiar tema</span>☀️</button>
+                    <a href="{{ url_for('logout') }}" class="logout-button"><span class="tooltip">Cerrar sesión</span>🚪</a>
                 </div>
             </div>
             <div class="chat-area" id="chatArea">
