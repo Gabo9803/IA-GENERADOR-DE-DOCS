@@ -1,0 +1,347 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Generador de Documentos - Chat IA</title>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap">
+    <style>
+        :root {
+            --bg-color: #f3f4f6;
+            --container-bg: #ffffff;
+            --text-color: #1f2937;
+            --user-bg: #3b82f6;
+            --ai-bg: #e5e7eb;
+            --input-bg: #ffffff;
+            --border-color: #d1d5db;
+            --accent-color: #3b82f6;
+            --shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+        }
+
+        [data-theme="dark"] {
+            --bg-color: #1f2937;
+            --container-bg: #374151;
+            --text-color: #f3f4f6;
+            --user-bg: #60a5fa;
+            --ai-bg: #4b5563;
+            --input-bg: #4b5563;
+            --border-color: #6b7280;
+            --accent-color: #60a5fa;
+            --shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', sans-serif;
+            background: var(--bg-color);
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 20px;
+            color: var(--text-color);
+            transition: background 0.3s ease, color 0.3s ease;
+        }
+
+        .container {
+            background: var(--container-bg);
+            border-radius: 16px;
+            box-shadow: var(--shadow);
+            max-width: 800px;
+            width: 100%;
+            height: 80vh;
+            max-height: 900px;
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .header {
+            padding: 15px 20px;
+            border-bottom: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: var(--container-bg);
+        }
+
+        .header h1 {
+            font-size: 1.5rem;
+            font-weight: 600;
+        }
+
+        .theme-toggle, .clear-chat {
+            background: none;
+            border: none;
+            cursor: pointer;
+            font-size: 1.2rem;
+            color: var(--text-color);
+            transition: color 0.3s ease;
+        }
+
+        .theme-toggle:hover, .clear-chat:hover {
+            color: var(--accent-color);
+        }
+
+        .chat-area {
+            flex: 1;
+            padding: 20px;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        .message {
+            max-width: 70%;
+            padding: 12px 16px;
+            border-radius: 12px;
+            line-height: 1.5;
+            font-size: 0.95rem;
+            animation: fadeIn 0.3s ease;
+        }
+
+        .user-message {
+            background: var(--user-bg);
+            color: white;
+            align-self: flex-end;
+            border-bottom-right-radius: 4px;
+        }
+
+        .ai-message {
+            background: var(--ai-bg);
+            color: var(--text-color);
+            align-self: flex-start;
+            border-bottom-left-radius: 4px;
+            position: relative;
+        }
+
+        .ai-message pre {
+            white-space: pre-wrap;
+            margin: 0;
+        }
+
+        .copy-button {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            background: none;
+            border: none;
+            cursor: pointer;
+            color: var(--text-color);
+            opacity: 0.6;
+            transition: opacity 0.3s ease;
+        }
+
+        .copy-button:hover {
+            opacity: 1;
+        }
+
+        .typing {
+            align-self: flex-start;
+            color: var(--accent-color);
+            font-style: italic;
+            padding: 12px 16px;
+            animation: pulse 1.5s infinite;
+        }
+
+        .input-area {
+            padding: 15px;
+            border-top: 1px solid var(--border-color);
+            background: var(--container-bg);
+        }
+
+        .input-group {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+        }
+
+        textarea {
+            flex: 1;
+            height: 50px;
+            padding: 12px;
+            border: 2px solid var(--border-color);
+            border-radius: 8px;
+            background: var(--input-bg);
+            color: var(--text-color);
+            font-size: 0.95rem;
+            resize: none;
+            transition: border-color 0.3s ease;
+        }
+
+        textarea:focus {
+            outline: none;
+            border-color: var(--accent-color);
+        }
+
+        button.send {
+            padding: 12px 20px;
+            background: var(--accent-color);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 0.95rem;
+            transition: background 0.3s ease, transform 0.1s ease;
+        }
+
+        button.send:hover {
+            background: #2563eb;
+            transform: translateY(-2px);
+        }
+
+        button.send:active {
+            transform: translateY(0);
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        @keyframes pulse {
+            0% { opacity: 0.6; }
+            50% { opacity: 1; }
+            100% { opacity: 0.6; }
+        }
+
+        @media (max-width: 600px) {
+            .container {
+                height: 90vh;
+                margin: 10px;
+                border-radius: 12px;
+            }
+
+            .header h1 {
+                font-size: 1.2rem;
+            }
+
+            .message {
+                max-width: 85%;
+                font-size: 0.9rem;
+            }
+
+            textarea {
+                height: 40px;
+                font-size: 0.9rem;
+            }
+
+            button.send {
+                padding: 10px 15px;
+                font-size: 0.9rem;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container" data-theme="light">
+        <div class="header">
+            <h1>Generador de Documentos - Chat IA</h1>
+            <div>
+                <button class="clear-chat" onclick="clearChat()" title="Limpiar chat">🗑️</button>
+                <button class="theme-toggle" onclick="toggleTheme()" title="Cambiar tema">☀️</button>
+            </div>
+        </div>
+        <div class="chat-area" id="chatArea">
+            <!-- Mensajes se agregan aquí dinámicamente -->
+        </div>
+        <div class="input-area">
+            <div class="input-group">
+                <textarea id="prompt" placeholder="Describe el documento que deseas generar..."></textarea>
+                <button class="send" onclick="sendMessage()">Enviar</button>
+            </div>
+        </div>
+    </div>
+    <script>
+        const chatArea = document.getElementById('chatArea');
+        const promptInput = document.getElementById('prompt');
+
+        function addMessage(content, isUser = false) {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = isUser ? 'message user-message' : 'message ai-message';
+            if (!isUser) {
+                messageDiv.innerHTML = `<pre>${content}</pre><button class="copy-button" onclick="copyMessage(this)" title="Copiar">📋</button>`;
+            } else {
+                messageDiv.textContent = content;
+            }
+            chatArea.appendChild(messageDiv);
+            chatArea.scrollTop = chatArea.scrollHeight;
+        }
+
+        function addTypingIndicator() {
+            const typingDiv = document.createElement('div');
+            typingDiv.className = 'typing';
+            typingDiv.textContent = 'IA está escribiendo...';
+            typingDiv.id = 'typingIndicator';
+            chatArea.appendChild(typingDiv);
+            chatArea.scrollTop = chatArea.scrollHeight;
+        }
+
+        function removeTypingIndicator() {
+            const typingIndicator = document.getElementById('typingIndicator');
+            if (typingIndicator) typingIndicator.remove();
+        }
+
+        async function sendMessage() {
+            const prompt = promptInput.value.trim();
+            if (!prompt) return;
+
+            addMessage(prompt, true);
+            promptInput.value = '';
+            addTypingIndicator();
+
+            try {
+                const response = await fetch('/generate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ prompt })
+                });
+                const data = await response.json();
+                removeTypingIndicator();
+                if (data.error) {
+                    addMessage(`Error: ${data.error}`);
+                } else {
+                    addMessage(data.document);
+                }
+            } catch (error) {
+                removeTypingIndicator();
+                addMessage(`Error: ${error.message}`);
+            }
+        }
+
+        function copyMessage(button) {
+            const messageText = button.previousElementSibling.textContent;
+            navigator.clipboard.writeText(messageText);
+            button.textContent = '✅';
+            setTimeout(() => button.textContent = '📋', 2000);
+        }
+
+        function clearChat() {
+            chatArea.innerHTML = '';
+        }
+
+        function toggleTheme() {
+            const container = document.querySelector('.container');
+            const themeButton = document.querySelector('.theme-toggle');
+            const isDark = container.getAttribute('data-theme') === 'dark';
+            container.setAttribute('data-theme', isDark ? 'light' : 'dark');
+            themeButton.textContent = isDark ? '☀️' : '🌙';
+        }
+
+        // Enviar mensaje con Enter (sin Shift)
+        promptInput.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                sendMessage();
+            }
+        });
+    </script>
+</body>
+</html>
