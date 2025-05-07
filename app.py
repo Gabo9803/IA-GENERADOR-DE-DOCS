@@ -93,11 +93,22 @@ def get_db_connection():
     conn.row_factory = sqlite3.Row
     return conn
 
+def get_default_style_profile():
+    """Devuelve un estilo por defecto para la generación de documentos."""
+    return {
+        'font_name': 'Helvetica',
+        'font_size': 12,
+        'tone': 'neutral',
+        'margins': {'top': 1, 'bottom': 1, 'left': 1, 'right': 1},
+        'structure': ['paragraphs']
+    }
+
 def parse_markdown_to_reportlab(text, style_profile=None):
     """Convierte Markdown a elementos de reportlab con soporte para estilos personalizados."""
     styles = getSampleStyleSheet()
-    font_name = style_profile.get('font_name', 'Helvetica') if style_profile else 'Helvetica'
-    font_size = style_profile.get('font_size', 12) if style_profile else 12
+    style_profile = style_profile or get_default_style_profile()
+    font_name = style_profile['font_name']
+    font_size = style_profile['font_size']
     body_style = ParagraphStyle(
         name='Body', fontSize=font_size, leading=font_size * 1.33, spaceAfter=8, fontName=font_name
     )
@@ -266,6 +277,7 @@ def generate_document():
         if session_id not in session_messages:
             session_messages[session_id] = []
 
+        style_profile = get_style_profile(style_profile_id)
         system_prompt = f"""
         Eres GarBotGPT, un asistente que genera documentos profesionales en formato Markdown. 
         - Tipo de documento: {doc_type} (e.g., carta formal, informe, correo, contrato, currículum).
@@ -273,7 +285,7 @@ def generate_document():
         - Longitud: {length} (corto: ~100 palabras, medio: ~300 palabras, largo: ~600 palabras).
         - Idioma: {language} (e.g., es para español, en para inglés, fr para francés).
         - Usa encabezados (#, ##), listas (-), negritas (**), y tablas (|...|) cuando sea apropiado.
-        - Si se proporciona un estilo, síguelo: {get_style_profile(style_profile_id) if style_profile_id else 'ninguno'}.
+        - Estilo: {style_profile}.
         - Considera el contexto de los mensajes anteriores para mantener coherencia en la conversación.
         """
         
@@ -303,8 +315,9 @@ def generate_document():
         return jsonify({'error': str(e)}), 500
 
 def get_style_profile(profile_id):
+    """Obtiene un perfil de estilo o devuelve el estilo por defecto."""
     if not profile_id:
-        return None
+        return get_default_style_profile()
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute('SELECT * FROM style_profiles WHERE id = ? AND user_id = ?', (profile_id, current_user.id))
@@ -318,7 +331,7 @@ def get_style_profile(profile_id):
             'margins': json.loads(profile['margins']),
             'structure': json.loads(profile['structure'])
         }
-    return None
+    return get_default_style_profile()
 
 @app.route('/generate_pdf', methods=['POST'])
 @login_required
@@ -434,6 +447,20 @@ def delete_style_profile(profile_id):
     if cursor.rowcount > 0:
         return jsonify({'message': 'Perfil de estilo eliminado'})
     return jsonify({'error': 'Perfil no encontrado'}), 404
+
+@app.route('/purge_style_profiles', methods=['DELETE'])
+@login_required
+def purge_style_profiles():
+    """Elimina todos los perfiles de estilo del usuario autenticado."""
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('DELETE FROM style_profiles WHERE user_id = ?', (current_user.id,))
+        conn.commit()
+        conn.close()
+        return jsonify({'message': 'Todos los perfiles de estilo han sido eliminados'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
