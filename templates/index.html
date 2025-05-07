@@ -165,6 +165,31 @@
             background: var(--ai-bg);
         }
 
+        .purge-styles {
+            padding: 10px;
+            background: var(--accent-color);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            font-weight: 600;
+            transition: all 0.3s ease;
+            backdrop-filter: blur(5px);
+            -webkit-backdrop-filter: blur(5px);
+        }
+
+        .purge-styles:hover {
+            background: #2563eb;
+            transform: translateY(-2px);
+            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.3);
+        }
+
+        .purge-styles:active {
+            transform: translateY(0);
+            box-shadow: var(--shadow);
+        }
+
         .header {
             padding: 15px 25px;
             border-bottom: 1px solid var(--border-color);
@@ -562,6 +587,7 @@
                 <option value="">Ninguno</option>
             </select>
             <div class="style-list" id="styleList"></div>
+            <button class="purge-styles" onclick="purgeStyleProfiles()">Purgar Perfiles de Estilo</button>
             <h3>Subir Documento</h3>
             <div class="upload-area" id="uploadArea">
                 Arrastra o haz clic para subir un PDF/TXT
@@ -673,6 +699,24 @@
                 const data = await response.json();
                 showToast(data.message);
                 loadStyleProfiles();
+            } catch (error) {
+                showToast(`Error: ${error.message}`, 'error');
+            }
+        }
+
+        // Purgar todos los perfiles de estilo
+        async function purgeStyleProfiles() {
+            if (!confirm('¿Estás seguro de que quieres eliminar todos los perfiles de estilo?')) return;
+            try {
+                const response = await fetch('/purge_style_profiles', { method: 'DELETE' });
+                const data = await response.json();
+                if (data.error) {
+                    showToast(`Error: ${data.error}`, 'error');
+                } else {
+                    showToast(data.message);
+                    loadStyleProfiles();
+                    document.getElementById('styleProfile').value = '';
+                }
             } catch (error) {
                 showToast(`Error: ${error.message}`, 'error');
             }
