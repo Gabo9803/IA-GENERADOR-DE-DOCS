@@ -1,4 +1,5 @@
-from flask import Flask, render_template, request, jsonify, send_file
+from flask import Flask, render_template, request, jsonify, send_file, redirect, url_for, flash
+from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from dotenv import load_dotenv
 import openai
 import os
@@ -12,8 +13,11 @@ from io import BytesIO
 from datetime import datetime
 import re
 import json
+import sqlite3
+import bcrypt
 
 app = Flask(__name__)
+app.secret_key = os.urandom(24)  # Clave secreta para sesiones
 
 # Cargar variables de entorno
 load_dotenv()
@@ -24,10 +28,70 @@ if not openai_api_key:
 # Configurar cliente OpenAI
 client = openai.OpenAI(api_key=openai_api_key)
 
-# Cache para respuestas y estilos
+# Configurar Flask-Login
+login_manager = LoginManager()
+login_manager.init_app(app)
+login_manager.login_view = 'login'
+
+# Modelo de usuario
+class User(UserMixin):
+    def __init__(self, id, email):
+        self.id = id
+        self.email = email
+
+@login_manager.user_loader
+def load_user(user_id):
+    conn = sqlite3.connect('profiles.db')
+    cursor = conn.cursor()
+    cursor.execute('SELECT id, email FROM users WHERE id = ?', (user_id,))
+    user = cursor.fetchone()
+    conn.close()
+    if user:
+        return User(user[0], user[1])
+    return None
+
+# Inicializar la base de datos
+def init_db():
+    conn = sqlite3.connect('profiles.db')
+    cursor = conn.cursor()
+    
+    # Tabla de usuarios
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS users (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email TEXT UNIQUE NOT NULL,
+            password TEXT NOT NULL
+        )
+    ''')
+    
+    # Tabla de perfiles de estilo
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS style_profiles (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            font_name TEXT,
+            font_size INTEGER,
+            tone TEXT,
+            margins TEXT,
+            structure TEXT,
+            FOREIGN KEY (user_id) REFERENCES users (id)
+        )
+    ''')
+    
+    conn.commit()
+    conn.close()
+
+# Ejecutar la inicialización de la base de datos al iniciar la aplicación
+init_db()
+
+# Cache para respuestas y sesiones
 response_cache = {}
-style_profiles = {}
 session_messages = {}  # Almacena mensajes por sesión
+
+def get_db_connection():
+    conn = sqlite3.connect('profiles.db')
+    conn.row_factory = sqlite3.Row
+    return conn
 
 def parse_markdown_to_reportlab(text, style_profile=None):
     """Convierte Markdown a elementos de reportlab con soporte para estilos personalizados."""
@@ -90,12 +154,10 @@ def analyze_document(file):
         with pdfplumber.open(file) as pdf:
             for page in pdf.pages:
                 content += page.extract_text() or ""
-                # Análisis de tipografía (aproximado)
                 chars = page.chars
                 if chars:
                     style_profile['font_name'] = chars[0].get('fontname', 'Helvetica').split('-')[0]
                     style_profile['font_size'] = round(chars[0].get('size', 12))
-                # Análisis de márgenes (aproximado)
                 style_profile['margins'] = {
                     'top': page.bbox[3] - page.chars[-1]['y1'] if page.chars else 1,
                     'bottom': page.chars[0]['y0'] - page.bbox[1] if page.chars else 1,
@@ -105,13 +167,12 @@ def analyze_document(file):
     elif file.filename.endswith('.txt'):
         content = file.read().decode('utf-8')
     
-    # Análisis de tono y estructura con OpenAI
     try:
         response = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=[
                 {"role": "system", "content": "Analiza el tono (formal, informal, técnico) y la estructura (encabezados, párrafos, listas, tablas) del siguiente texto. Devuelve un JSON con 'tone' y 'structure'."},
-                {"role": "user", "content": content[:4000]}  # Limitar para evitar tokens excesivos
+                {"role": "user", "content": content[:4000]}
             ],
             max_tokens=500
         )
@@ -124,10 +185,65 @@ def analyze_document(file):
     return style_profile, content
 
 @app.route('/')
+@login_required
 def index():
     return render_template('index.html')
 
+@app.route('/login', methods=['GET', 'POST'])
+def login():
+    if current_user.is_authenticated:
+        return redirect(url_for('index'))
+    
+    if request.method == 'POST':
+        email = request.form['email']
+        password = request.form['password']
+        
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT id, email, password FROM users WHERE email = ?', (email,))
+        user = cursor.fetchone()
+        conn.close()
+        
+        if user and bcrypt.checkpw(password.encode('utf-8'), user['password'].encode('utf-8')):
+            login_user(User(user['id'], user['email']))
+            return redirect(url_for('index'))
+        else:
+            flash('Correo o contraseña incorrectos', 'error')
+    
+    return render_template('login.html')
+
+@app.route('/register', methods=['GET', 'POST'])
+def register():
+    if current_user.is_authenticated:
+        return redirect(url_for('index'))
+    
+    if request.method == 'POST':
+        email = request.form['email']
+        password = request.form['password']
+        
+        hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+        
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute('INSERT INTO users (email, password) VALUES (?, ?)', (email, hashed_password))
+            conn.commit()
+            conn.close()
+            flash('Registro exitoso. Por favor, inicia sesión.', 'success')
+            return redirect(url_for('login'))
+        except sqlite3.IntegrityError:
+            flash('El correo ya está registrado', 'error')
+    
+    return render_template('login.html', register=True)
+
+@app.route('/logout')
+@login_required
+def logout():
+    logout_user()
+    return redirect(url_for('login'))
+
 @app.route('/generate', methods=['POST'])
+@login_required
 def generate_document():
     try:
         data = request.json
@@ -138,21 +254,18 @@ def generate_document():
         length = data.get('length', 'medium')
         language = data.get('language', 'es')
         style_profile_id = data.get('style_profile_id', None)
-        message_history = data.get('message_history', [])  # Historial de mensajes
+        message_history = data.get('message_history', [])
 
         if not prompt:
             return jsonify({'error': 'El prompt está vacío'}), 400
 
-        # Verificar cache
-        cache_key = f"{session_id}:{prompt}:{doc_type}:{tone}:{length}:{language}:{style_profile_id}"
+        cache_key = f"{current_user.id}:{session_id}:{prompt}:{doc_type}:{tone}:{length}:{language}:{style_profile_id}"
         if cache_key in response_cache:
             return jsonify({'document': response_cache[cache_key]})
 
-        # Inicializar historial de mensajes para la sesión si no existe
         if session_id not in session_messages:
             session_messages[session_id] = []
 
-        # Construir mensajes para OpenAI
         system_prompt = f"""
         Eres GarBotGPT, un asistente que genera documentos profesionales en formato Markdown. 
         - Tipo de documento: {doc_type} (e.g., carta formal, informe, correo, contrato, currículum).
@@ -160,17 +273,14 @@ def generate_document():
         - Longitud: {length} (corto: ~100 palabras, medio: ~300 palabras, largo: ~600 palabras).
         - Idioma: {language} (e.g., es para español, en para inglés, fr para francés).
         - Usa encabezados (#, ##), listas (-), negritas (**), y tablas (|...|) cuando sea apropiado.
-        - Si se proporciona un estilo, síguelo: {style_profiles.get(style_profile_id, {}) if style_profile_id else 'ninguno'}.
+        - Si se proporciona un estilo, síguelo: {get_style_profile(style_profile_id) if style_profile_id else 'ninguno'}.
         - Considera el contexto de los mensajes anteriores para mantener coherencia en la conversación.
         """
         
-        # Combinar historial recibido con el nuevo mensaje
         messages = [{"role": "system", "content": system_prompt}]
-        # Limitar historial a los últimos 10 mensajes para evitar exceso de tokens
         messages.extend(message_history[-10:])
         messages.append({"role": "user", "content": prompt})
 
-        # Llamada a la API de OpenAI
         response = client.chat.completions.create(
             model="gpt-3.5-turbo",
             messages=messages,
@@ -181,7 +291,6 @@ def generate_document():
         document = response.choices[0].message.content
         response_cache[cache_key] = document
 
-        # Guardar mensajes en el historial de la sesión
         session_messages[session_id].append({"role": "user", "content": prompt})
         session_messages[session_id].append({"role": "assistant", "content": document})
 
@@ -193,7 +302,26 @@ def generate_document():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+def get_style_profile(profile_id):
+    if not profile_id:
+        return None
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM style_profiles WHERE id = ? AND user_id = ?', (profile_id, current_user.id))
+    profile = cursor.fetchone()
+    conn.close()
+    if profile:
+        return {
+            'font_name': profile['font_name'],
+            'font_size': profile['font_size'],
+            'tone': profile['tone'],
+            'margins': json.loads(profile['margins']),
+            'structure': json.loads(profile['structure'])
+        }
+    return None
+
 @app.route('/generate_pdf', methods=['POST'])
+@login_required
 def generate_pdf():
     try:
         data = request.json
@@ -202,7 +330,6 @@ def generate_pdf():
         if not content:
             return jsonify({'error': 'El contenido está vacío'}), 400
 
-        # Crear buffer para el PDF
         buffer = BytesIO()
         doc = SimpleDocTemplate(
             buffer, 
@@ -213,19 +340,16 @@ def generate_pdf():
             bottomMargin=0.75*inch
         )
         
-        # Estilos
         styles = getSampleStyleSheet()
         title_style = ParagraphStyle(name='Title', fontSize=18, leading=22, spaceAfter=12, fontName='Helvetica-Bold')
         subtitle_style = ParagraphStyle(name='Subtitle', fontSize=10, leading=14, spaceAfter=10, fontName='Helvetica-Oblique')
 
-        # Elementos del PDF
         story = []
         story.append(Paragraph("Documento Generado por GarBotGPT", title_style))
         story.append(Paragraph(f"Fecha: {datetime.now().strftime('%d/%m/%Y %H:%M')}", subtitle_style))
         story.append(Spacer(1, 0.3 * inch))
         
-        # Aplicar estilo personalizado si existe
-        style_profile = style_profiles.get(style_profile_id, None)
+        style_profile = get_style_profile(style_profile_id)
         story.extend(parse_markdown_to_reportlab(content, style_profile))
         
         doc.build(story)
@@ -240,6 +364,7 @@ def generate_pdf():
         return jsonify({'error': str(e)}), 500
 
 @app.route('/analyze_document', methods=['POST'])
+@login_required
 def analyze_document_endpoint():
     try:
         if 'file' not in request.files:
@@ -250,25 +375,63 @@ def analyze_document_endpoint():
             return jsonify({'error': 'Formato no soportado. Usa PDF o TXT.'}), 400
         
         style_profile, content = analyze_document(file)
-        profile_id = str(len(style_profiles))
-        style_profiles[profile_id] = style_profile
+        
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT INTO style_profiles (user_id, font_name, font_size, tone, margins, structure)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (
+            current_user.id,
+            style_profile['font_name'],
+            style_profile['font_size'],
+            style_profile['tone'],
+            json.dumps(style_profile['margins']),
+            json.dumps(style_profile['structure'])
+        ))
+        profile_id = cursor.lastrowid
+        conn.commit()
+        conn.close()
         
         return jsonify({
-            'style_profile_id': profile_id,
+            'style_profile_id': str(profile_id),
             'style_profile': style_profile,
-            'content_summary': content[:500]  # Resumen para evitar respuestas largas
+            'content_summary': content[:500]
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 @app.route('/style_profiles', methods=['GET'])
+@login_required
 def get_style_profiles():
-    return jsonify(style_profiles)
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('SELECT * FROM style_profiles WHERE user_id = ?', (current_user.id,))
+    profiles = cursor.fetchall()
+    conn.close()
+    
+    result = {}
+    for profile in profiles:
+        result[str(profile['id'])] = {
+            'font_name': profile['font_name'],
+            'font_size': profile['font_size'],
+            'tone': profile['tone'],
+            'margins': json.loads(profile['margins']),
+            'structure': json.loads(profile['structure'])
+        }
+    
+    return jsonify(result)
 
 @app.route('/style_profiles/<profile_id>', methods=['DELETE'])
+@login_required
 def delete_style_profile(profile_id):
-    if profile_id in style_profiles:
-        del style_profiles[profile_id]
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM style_profiles WHERE id = ? AND user_id = ?', (profile_id, current_user.id))
+    conn.commit()
+    conn.close()
+    
+    if cursor.rowcount > 0:
         return jsonify({'message': 'Perfil de estilo eliminado'})
     return jsonify({'error': 'Perfil no encontrado'}), 404
 
