@@ -77,10 +77,7 @@ CURRENT_SCHEMA_VERSION = 5
 
 def get_db_connection():
     """Establece una conexión con la base de datos PostgreSQL."""
-    database_url = os.getenv('DATABASE_URL')
-    if not database_url:
-        raise ValueError("DATABASE_URL no está configurada en las variables de entorno")
-    
+    database_url = os.getenv('DATABASE_URL', 'postgresql://fgarola:OIBt3xPZKDAQIg3YHQUUUkCL2Hg7gR1g@dpg-d0e74a6uk2gs73f78psg-a/garbotdocsdb')
     parsed_url = urlparse(database_url)
     conn = psycopg2.connect(
         dbname=parsed_url.path[1:],
@@ -939,7 +936,7 @@ def generate_document():
         
         is_explanatory = re.search(r'^(¿Quién es|¿Qué es|explicar|detallar)\b', prompt, re.IGNORECASE) is not None
         is_html = doc_type == 'html' or re.search(r'\b(html|página web|sitio web)\b', prompt, re.IGNORECASE) is not None
-        requests_css = re.search(r'\b(css|estilo|diseño|con estilo)\b', prompt, re.IGNORECASE) is not None
+        requests_css = re.search(r'\b(css|estilo|diseño|con estilo)\b', prompt, re.IGNORECASE) is not none
         
         if is_explanatory:
             system_prompt = f"""
