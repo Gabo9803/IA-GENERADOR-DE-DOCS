@@ -1,4 +1,4 @@
-FFlask==2.3.2
+Flask==2.3.2
 python-dotenv==1.0.0
 openai>=1.0.0
 gunicorn==22.0.0
@@ -10,5 +10,7 @@ flask-socketio==5.3.6
 Pillow==10.4.0
 stripe==10.8.0
 opencv-python-headless==4.10.0.84
+Flask-Migrate==4.0.7
+alembic==1.13.2
 eventlet==0.36.0
 pandas==2.2.2
