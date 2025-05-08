@@ -168,12 +168,23 @@ def migrate_db():
         current_version = 1
     
     if current_version < 2:
-        cursor.execute('ALTER TABLE style_profiles ADD COLUMN text_color TEXT DEFAULT "#000000"')
-        cursor.execute('ALTER TABLE style_profiles ADD COLUMN background_color TEXT DEFAULT "#FFFFFF"')
-        cursor.execute('ALTER TABLE style_profiles ADD COLUMN alignment TEXT DEFAULT "left"')
-        cursor.execute('ALTER TABLE style_profiles ADD COLUMN line_spacing REAL DEFAULT 1.33')
-        cursor.execute('ALTER TABLE style_profiles ADD COLUMN document_purpose TEXT DEFAULT "general"')
-        cursor.execute('ALTER TABLE style_profiles ADD COLUMN confidence_scores TEXT DEFAULT "{}"')
+        # Check existing columns in style_profiles
+        cursor.execute('PRAGMA table_info(style_profiles)')
+        columns = [col[1] for col in cursor.fetchall()]
+        
+        # Add columns only if they don't exist
+        if 'text_color' not in columns:
+            cursor.execute('ALTER TABLE style_profiles ADD COLUMN text_color TEXT DEFAULT "#000000"')
+        if 'background_color' not in columns:
+            cursor.execute('ALTER TABLE style_profiles ADD COLUMN background_color TEXT DEFAULT "#FFFFFF"')
+        if 'alignment' not in columns:
+            cursor.execute('ALTER TABLE style_profiles ADD COLUMN alignment TEXT DEFAULT "left"')
+        if 'line_spacing' not in columns:
+            cursor.execute('ALTER TABLE style_profiles ADD COLUMN line_spacing REAL DEFAULT 1.33')
+        if 'document_purpose' not in columns:
+            cursor.execute('ALTER TABLE style_profiles ADD COLUMN document_purpose TEXT DEFAULT "general"')
+        if 'confidence_scores' not in columns:
+            cursor.execute('ALTER TABLE style_profiles ADD COLUMN confidence_scores TEXT DEFAULT "{}"')
         current_version = 2
     
     if current_version < 3:
