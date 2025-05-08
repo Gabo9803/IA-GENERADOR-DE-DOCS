@@ -661,7 +661,7 @@
                     <button class="export-chat" onclick="exportChat()"><span class="tooltip">Exportar chat</span>📤</button>
                     <button class="clear-chat" onclick="clearChat()"><span class="tooltip">Limpiar chat</span>🗑️</button>
                     <button class="theme-toggle" onclick="toggleTheme()"><span class="tooltip">Cambiar tema</span>☀️</button>
-                    <a href="{{ url_for('logout') }}" class="logout-button"><span class="tooltip">Cerrar sesión</span>🚪</a>
+                    <a href="/logout" class="logout-button"><span class="tooltip">Cerrar sesión</span>🚪</a>
                 </div>
             </div>
             <div class="chat-area" id="chatArea">
@@ -689,10 +689,9 @@
     <script>
         // Configurar opciones de marked.js para manejar mejor el Markdown
         marked.setOptions({
-            breaks: true, // Permitir saltos de línea simples
-            gfm: true, // Habilitar GitHub Flavored Markdown
+            breaks: true,
+            gfm: true,
             highlight: function(code, lang) {
-                // Opcional: Añadir resaltado de sintaxis si usas una librería como highlight.js
                 return code;
             }
         });
@@ -709,8 +708,7 @@
         const suggestionsContainer = document.getElementById('suggestions');
         let currentContentBlob = null;
         let currentContentType = 'pdf';
-        let currentSessionId = 'default';
-        let sessions = JSON.parse(localStorage.getItem('sessions') || '{}');
+        let currentSessionId = null; // Inicialmente null hasta que se cargue o cree una sesión
         let offlineQueue = [];
 
         // Lista de sugerencias base
@@ -722,17 +720,30 @@
             { prompt: 'Explica qué es la inteligencia artificial', description: 'Proporciona una explicación estructurada sobre IA.' }
         ];
 
-        // Cargar sesiones
-        function loadSessions() {
-            sessionList.innerHTML = '';
-            Object.keys(sessions).forEach(id => {
-                const session = sessions[id];
-                const item = document.createElement('div');
-                item.className = 'session-item';
-                item.textContent = session.name || `Sesión ${id}`;
-                item.onclick = () => loadSession(id);
-                sessionList.appendChild(item);
-            });
+        // Cargar sesiones desde el backend
+        async function loadSessions() {
+            try {
+                const response = await fetch('/sessions');
+                if (!response.ok) throw new Error('Error al cargar sesiones');
+                const sessions = await response.json();
+                sessionList.innerHTML = '';
+                Object.keys(sessions).forEach(id => {
+                    const session = sessions[id];
+                    const item = document.createElement('div');
+                    item.className = 'session-item';
+                    item.textContent = session.name;
+                    item.onclick = () => loadSession(id);
+                    sessionList.appendChild(item);
+                });
+                // Si no hay sesión actual, cargar la más reciente
+                if (!currentSessionId && Object.keys(sessions).length > 0) {
+                    const latestSessionId = Object.keys(sessions).sort((a, b) => 
+                        new Date(sessions[b].created_at) - new Date(sessions[a].created_at))[0];
+                    loadSession(latestSessionId);
+                }
+            } catch (error) {
+                showToast(`Error al cargar sesiones: ${error.message}`, 'error');
+            }
         }
 
         // Cargar perfiles de estilo
@@ -797,47 +808,73 @@
             }
         }
 
-        // Cargar sesión específica
-        function loadSession(id) {
-            currentSessionId = id;
-            chatArea.innerHTML = '';
-            (sessions[id].messages || []).forEach(msg => addMessage(msg.content, msg.isUser, msg.contentType || 'pdf', false));
-            toggleSidebar();
-            showToast('Sesión cargada');
-            updateSuggestions();
+        // Cargar sesión específica desde el backend
+        async function loadSession(id) {
+            try {
+                const response = await fetch(`/session/${id}`);
+                if (!response.ok) throw new Error('Sesión no encontrada');
+                const session = await response.json();
+                currentSessionId = id;
+                chatArea.innerHTML = '';
+                session.messages.forEach(msg => addMessage(msg.content, msg.role === 'user', msg.content_type || 'pdf', false));
+                toggleSidebar();
+                showToast('Sesión cargada');
+                updateSuggestions();
+            } catch (error) {
+                showToast(`Error al cargar sesión: ${error.message}`, 'error');
+            }
         }
 
-        // Nueva sesión
-        function newSession() {
-            const name = prompt('Nombre de la nueva sesión:') || `Sesión ${Date.now()}`;
-            currentSessionId = Date.now().toString();
-            sessions[currentSessionId] = { name, messages: [] };
-            chatArea.innerHTML = '';
-            saveSessions();
-            loadSessions();
-            showToast('Nueva sesión creada');
-            updateSuggestions();
-        }
-
-        // Guardar sesiones
-        function saveSessions() {
-            localStorage.setItem('sessions', JSON.stringify(sessions));
+        // Crear nueva sesión
+        async function newSession() {
+            try {
+                // Enviar un mensaje vacío para crear una nueva sesión en el backend
+                const response = await fetch('/generate', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        prompt: 'Iniciar nueva sesión', 
+                        doc_type: 'general', 
+                        tone: 'neutral', 
+                        length: 'short', 
+                        language: 'es',
+                        message_history: []
+                    })
+                });
+                const data = await response.json();
+                if (data.error) throw new Error(data.error);
+                currentSessionId = data.session_id;
+                chatArea.innerHTML = '';
+                loadSessions();
+                showToast('Nueva sesión creada');
+                updateSuggestions();
+            } catch (error) {
+                showToast(`Error al crear sesión: ${error.message}`, 'error');
+            }
         }
 
         // Buscar en sesiones
-        function searchSessions() {
+        async function searchSessions() {
             const query = searchInput.value.toLowerCase();
-            sessionList.innerHTML = '';
-            Object.keys(sessions).forEach(id => {
-                const session = sessions[id];
-                if (session.name.toLowerCase().includes(query) || session.messages.some(msg => msg.content.toLowerCase().includes(query))) {
-                    const item = document.createElement('div');
-                    item.className = 'session-item';
-                    item.textContent = session.name || `Sesión ${id}`;
-                    item.onclick = () => loadSession(id);
-                    sessionList.appendChild(item);
-                }
-            });
+            try {
+                const response = await fetch('/sessions');
+                if (!response.ok) throw new Error('Error al cargar sesiones');
+                const sessions = await response.json();
+                sessionList.innerHTML = '';
+                Object.keys(sessions).forEach(id => {
+                    const session = sessions[id];
+                    if (session.name.toLowerCase().includes(query) || 
+                        session.messages.some(msg => msg.content.toLowerCase().includes(query))) {
+                        const item = document.createElement('div');
+                        item.className = 'session-item';
+                        item.textContent = session.name;
+                        item.onclick = () => loadSession(id);
+                        sessionList.appendChild(item);
+                    }
+                });
+            } catch (error) {
+                showToast(`Error al buscar sesiones: ${error.message}`, 'error');
+            }
         }
 
         // Mostrar notificación toast
@@ -850,11 +887,23 @@
         }
 
         // Actualizar sugerencias dinámicas
-        function updateSuggestions() {
+        async function updateSuggestions() {
             suggestionsContainer.innerHTML = '';
-            const sessionMessages = sessions[currentSessionId]?.messages || [];
+            let sessionMessages = [];
+            if (currentSessionId) {
+                try {
+                    const response = await fetch(`/session/${currentSessionId}`);
+                    if (response.ok) {
+                        const session = await response.json();
+                        sessionMessages = session.messages || [];
+                    }
+                } catch (error) {
+                    console.error('Error al obtener mensajes de la sesión:', error);
+                }
+            }
+            
             const recentPrompts = sessionMessages
-                .filter(msg => msg.isUser)
+                .filter(msg => msg.role === 'user')
                 .map(msg => msg.content)
                 .slice(-3);
             
@@ -864,7 +913,7 @@
                     prompt,
                     description: 'Basado en tu historial reciente.'
                 }))
-            ].slice(0, 5); // Limitar a 5 sugerencias
+            ].slice(0, 5);
 
             suggestions.forEach(({ prompt, description }) => {
                 const suggestion = document.createElement('div');
@@ -893,11 +942,10 @@
                 messageDiv.textContent = content;
                 messageDiv.onclick = () => editMessage(messageDiv);
             } else {
-                // Escapar el contenido para evitar inyecciones y luego parsear como Markdown
                 const escapedContent = content
-                    .replace(/&/g, '&')
-                    .replace(/</g, '<')
-                    .replace(/>/g, '>');
+                    .replace(/&/g, '&amp;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;');
                 const renderedContent = marked.parse(escapedContent);
                 messageDiv.innerHTML = `
                     <div class="ai-message-content">${renderedContent}</div>
@@ -908,23 +956,17 @@
                     </div>`;
             }
             chatArea.appendChild(messageDiv);
-            // Forzar el scroll al último mensaje
             chatArea.scrollTo({ top: chatArea.scrollHeight, behavior: 'smooth' });
-            if (save) {
-                sessions[currentSessionId] = sessions[currentSessionId] || { name: `Sesión ${currentSessionId}`, messages: [] };
-                sessions[currentSessionId].messages.push({ content, isUser, contentType });
-                saveSessions();
-            }
         }
 
         // Editar mensaje
-        function editMessage(messageDiv) {
+        async function editMessage(messageDiv) {
             const currentText = messageDiv.textContent;
             promptInput.value = currentText;
             messageDiv.remove();
-            sessions[currentSessionId].messages = sessions[currentSessionId].messages.filter(msg => msg.content !== currentText);
-            saveSessions();
             promptInput.focus();
+            // Enviar el mensaje editado al backend
+            await sendMessage(true); // Forzar el envío para actualizar la sesión
         }
 
         // Responder a mensaje
@@ -950,11 +992,13 @@
         }
 
         // Enviar mensaje
-        async function sendMessage() {
+        async function sendMessage(isEdit = false) {
             const prompt = promptInput.value.trim();
             if (!prompt) return;
 
-            addMessage(prompt, true);
+            if (!isEdit) {
+                addMessage(prompt, true);
+            }
             promptInput.value = '';
             promptInput.style.height = '60px';
             addTypingIndicator();
@@ -967,11 +1011,18 @@
                 const language = document.getElementById('language').value;
                 const styleProfile = document.getElementById('styleProfile').value || null;
 
-                // Preparar historial de mensajes
-                const messageHistory = (sessions[currentSessionId]?.messages || []).map(msg => ({
-                    role: msg.isUser ? 'user' : 'assistant',
-                    content: msg.content
-                }));
+                // Obtener historial de mensajes
+                let messageHistory = [];
+                if (currentSessionId) {
+                    const response = await fetch(`/session/${currentSessionId}`);
+                    if (response.ok) {
+                        const session = await response.json();
+                        messageHistory = session.messages.map(msg => ({
+                            role: msg.role,
+                            content: msg.content
+                        }));
+                    }
+                }
 
                 const response = await fetch('/generate', {
                     method: 'POST',
@@ -995,8 +1046,10 @@
                     addMessage(`Error: ${data.error}`);
                     offlineQueue.push(prompt);
                 } else {
+                    currentSessionId = data.session_id; // Actualizar session_id
                     addMessage(data.document, false, data.content_type);
                     offlineQueue = offlineQueue.filter(p => p !== prompt);
+                    loadSessions(); // Refrescar lista de sesiones
                     updateSuggestions();
                 }
             } catch (error) {
@@ -1098,33 +1151,69 @@
         }
 
         // Limpiar chat
-        function clearChat() {
+        async function clearChat() {
             if (!confirm('¿Estás seguro de que quieres limpiar el chat?')) return;
-            chatArea.innerHTML = '';
-            sessions[currentSessionId].messages = [];
-            saveSessions();
-            showToast('Chat limpiado');
-            updateSuggestions();
+            if (currentSessionId) {
+                try {
+                    const response = await fetch(`/session/${currentSessionId}`);
+                    if (response.ok) {
+                        const session = await response.json();
+                        session.messages = [];
+                        await fetch('/generate', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                prompt: 'Limpiar sesión',
+                                session_id: currentSessionId,
+                                doc_type: 'general',
+                                tone: 'neutral',
+                                length: 'short',
+                                language: 'es',
+                                message_history: []
+                            })
+                        });
+                        chatArea.innerHTML = '';
+                        showToast('Chat limpiado');
+                        updateSuggestions();
+                    }
+                } catch (error) {
+                    showToast(`Error al limpiar chat: ${error.message}`, 'error');
+                }
+            } else {
+                chatArea.innerHTML = '';
+                showToast('Chat limpiado');
+            }
         }
 
         // Exportar chat
-        function exportChat() {
-            const messages = sessions[currentSessionId]?.messages || [];
-            if (messages.length === 0) {
-                showToast('No hay mensajes para exportar', 'error');
+        async function exportChat() {
+            if (!currentSessionId) {
+                showToast('No hay sesión activa para exportar', 'error');
                 return;
             }
-            const chatText = messages.map(msg => `${msg.isUser ? 'Usuario' : 'GarBotGPT'}: ${msg.content}`).join('\n\n');
-            const blob = new Blob([chatText], { type: 'text/plain' });
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `chat_sesion_${currentSessionId}.txt`;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
-            window.URL.revokeObjectURL(url);
-            showToast('Chat exportado');
+            try {
+                const response = await fetch(`/session/${currentSessionId}`);
+                if (!response.ok) throw new Error('Sesión no encontrada');
+                const session = await response.json();
+                const messages = session.messages;
+                if (messages.length === 0) {
+                    showToast('No hay mensajes para exportar', 'error');
+                    return;
+                }
+                const chatText = messages.map(msg => `${msg.role === 'user' ? 'Usuario' : 'GarBotGPT'}: ${msg.content}`).join('\n\n');
+                const blob = new Blob([chatText], { type: 'text/plain' });
+                const url = window.URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `chat_sesion_${currentSessionId}.txt`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                window.URL.revokeObjectURL(url);
+                showToast('Chat exportado');
+            } catch (error) {
+                showToast(`Error al exportar: ${error.message}`, 'error');
+            }
         }
 
         // Cambiar tema
@@ -1216,11 +1305,6 @@
             loadSessions();
             loadStyleProfiles();
             updateSuggestions();
-
-            // Cargar sesión por defecto si existe
-            if (sessions[currentSessionId]) {
-                loadSession(currentSessionId);
-            }
 
             // Reintentar mensajes en cola si hay conexión
             if (offlineQueue.length && navigator.onLine) {
