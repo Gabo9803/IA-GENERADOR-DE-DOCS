@@ -650,10 +650,10 @@
             </select>
             <div class="style-list" id="styleList"></div>
             <button class="purge-styles" onclick="purgeStyleProfiles()">Purgar Perfiles de Estilo</button>
-            <h3>Subir Documento</h3>
+            <h3>Subir Documento o Imagen</h3>
             <div class="upload-area" id="uploadArea">
-                Arrastra o haz clic para subir un PDF/TXT
-                <input type="file" id="fileInput" accept=".pdf,.txt" style="display: none;">
+                Arrastra o haz clic para subir un PDF/TXT o imagen
+                <input type="file" id="fileInput" accept=".pdf,.txt,.jpg,.jpeg,.png" style="display: none;" multiple>
             </div>
         </div>
         <div class="main">
@@ -689,14 +689,13 @@
             <button class="send" onclick="downloadCurrentContent()">Descargar</button>
         </div>
     </div>
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script>
-        // Configurar opciones de marked.js para manejar mejor el Markdown
         marked.setOptions({
-            breaks: true, // Permitir saltos de línea simples
-            gfm: true, // Habilitar GitHub Flavored Markdown
+            breaks: true,
+            gfm: true,
             highlight: function(code, lang) {
-                // Opcional: Añadir resaltado de sintaxis si usas una librería como highlight.js
                 return code;
             }
         });
@@ -716,8 +715,8 @@
         let currentSessionId = 'default';
         let sessions = JSON.parse(localStorage.getItem('sessions') || '{}');
         let offlineQueue = [];
+        let socket;
 
-        // Lista de sugerencias base
         const baseSuggestions = [
             { prompt: 'Escribe una carta formal', description: 'Genera una carta profesional para negocios o comunicaciones oficiales.' },
             { prompt: 'Redacta un informe técnico', description: 'Crea un informe detallado con estructura técnica y datos.' },
@@ -726,7 +725,6 @@
             { prompt: 'Explica qué es la inteligencia artificial', description: 'Proporciona una explicación estructurada sobre IA.' }
         ];
 
-        // Cargar sesiones
         function loadSessions() {
             sessionList.innerHTML = '';
             Object.keys(sessions).forEach(id => {
@@ -739,7 +737,6 @@
             });
         }
 
-        // Cargar perfiles de estilo
         async function loadStyleProfiles() {
             try {
                 const response = await fetch('/style_profiles');
@@ -771,7 +768,6 @@
             }
         }
 
-        // Eliminar perfil de estilo
         async function deleteStyleProfile(id) {
             try {
                 const response = await fetch(`/style_profiles/${id}`, { method: 'DELETE' });
@@ -783,7 +779,6 @@
             }
         }
 
-        // Purgar todos los perfiles de estilo
         async function purgeStyleProfiles() {
             if (!confirm('¿Estás seguro de que quieres eliminar todos los perfiles de estilo?')) return;
             try {
@@ -801,7 +796,6 @@
             }
         }
 
-        // Cargar sesión específica
         function loadSession(id) {
             currentSessionId = id;
             chatArea.innerHTML = '';
@@ -809,9 +803,9 @@
             toggleSidebar();
             showToast('Sesión cargada');
             updateSuggestions();
+            socket.emit('joinSession', { sessionId: currentSessionId });
         }
 
-        // Nueva sesión
         function newSession() {
             const name = prompt('Nombre de la nueva sesión:') || `Sesión ${Date.now()}`;
             currentSessionId = Date.now().toString();
@@ -821,14 +815,13 @@
             loadSessions();
             showToast('Nueva sesión creada');
             updateSuggestions();
+            socket.emit('joinSession', { sessionId: currentSessionId });
         }
 
-        // Guardar sesiones
         function saveSessions() {
             localStorage.setItem('sessions', JSON.stringify(sessions));
         }
 
-        // Buscar en sesiones
         function searchSessions() {
             const query = searchInput.value.toLowerCase();
             sessionList.innerHTML = '';
@@ -844,7 +837,6 @@
             });
         }
 
-        // Mostrar notificación toast
         function showToast(message, type = 'info') {
             const toast = document.createElement('div');
             toast.className = 'toast';
@@ -853,7 +845,6 @@
             setTimeout(() => toast.remove(), 4000);
         }
 
-        // Actualizar sugerencias dinámicas
         function updateSuggestions() {
             suggestionsContainer.innerHTML = '';
             const sessionMessages = sessions[currentSessionId]?.messages || [];
@@ -868,7 +859,7 @@
                     prompt,
                     description: 'Basado en tu historial reciente.'
                 }))
-            ].slice(0, 5); // Limitar a 5 sugerencias
+            ].slice(0, 5);
 
             suggestions.forEach(({ prompt, description }) => {
                 const suggestion = document.createElement('div');
@@ -882,14 +873,12 @@
             });
         }
 
-        // Usar una sugerencia
         function useSuggestion(prompt) {
             promptInput.value = prompt;
             promptInput.focus();
             sendMessage();
         }
 
-        // Agregar mensaje
         function addMessage(content, isUser = false, contentType = 'pdf', save = true) {
             const messageDiv = document.createElement('div');
             messageDiv.className = isUser ? 'message user-message' : 'message ai-message';
@@ -897,11 +886,11 @@
                 messageDiv.textContent = content;
                 messageDiv.onclick = () => editMessage(messageDiv);
             } else {
-                // Escapar el contenido para evitar inyecciones y luego parsear como Markdown
+                // Escapar correctamente los caracteres HTML para evitar inyecciones y problemas de sintaxis
                 const escapedContent = content
-                    .replace(/&/g, '&')
-                    .replace(/</g, '<')
-                    .replace(/>/g, '>');
+                    .replace(/&/g, '&amp;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;');
                 const renderedContent = marked.parse(escapedContent);
                 messageDiv.innerHTML = `
                     <div class="ai-message-content">${renderedContent}</div>
@@ -912,16 +901,15 @@
                     </div>`;
             }
             chatArea.appendChild(messageDiv);
-            // Forzar el scroll al último mensaje
             chatArea.scrollTo({ top: chatArea.scrollHeight, behavior: 'smooth' });
             if (save) {
                 sessions[currentSessionId] = sessions[currentSessionId] || { name: `Sesión ${currentSessionId}`, messages: [] };
                 sessions[currentSessionId].messages.push({ content, isUser, contentType });
                 saveSessions();
+                socket.emit('newMessage', { sessionId: currentSessionId, content, isUser, contentType });
             }
         }
 
-        // Editar mensaje
         function editMessage(messageDiv) {
             const currentText = messageDiv.textContent;
             promptInput.value = currentText;
@@ -929,16 +917,15 @@
             sessions[currentSessionId].messages = sessions[currentSessionId].messages.filter(msg => msg.content !== currentText);
             saveSessions();
             promptInput.focus();
+            socket.emit('editMessage', { sessionId: currentSessionId, oldContent: currentText, newContent: promptInput.value });
         }
 
-        // Responder a mensaje
         function replyToMessage(button) {
             const messageText = button.parentElement.previousElementSibling.textContent;
             promptInput.value = `Refiriéndote a: "${messageText.slice(0, 50)}..."\n`;
             promptInput.focus();
         }
 
-        // Indicador de escritura
         function addTypingIndicator() {
             const typingDiv = document.createElement('div');
             typingDiv.className = 'typing';
@@ -953,7 +940,6 @@
             if (typingIndicator) typingIndicator.remove();
         }
 
-        // Enviar mensaje
         async function sendMessage() {
             const prompt = promptInput.value.trim();
             if (!prompt) return;
@@ -972,7 +958,6 @@
                 const styleProfile = document.getElementById('styleProfile').value || null;
                 const model = document.getElementById('model').value;
 
-                // Preparar historial de mensajes
                 const messageHistory = (sessions[currentSessionId]?.messages || []).map(msg => ({
                     role: msg.isUser ? 'user' : 'assistant',
                     content: msg.content
@@ -990,7 +975,7 @@
                         language, 
                         style_profile_id: styleProfile,
                         message_history: messageHistory,
-                        model // Añadir el modelo seleccionado
+                        model
                     })
                 });
                 progressBar.style.width = '100%';
@@ -1013,7 +998,6 @@
             }
         }
 
-        // Copiar mensaje
         function copyMessage(button) {
             const messageContent = button.parentElement.previousElementSibling.innerText;
             navigator.clipboard.writeText(messageContent).then(() => {
@@ -1025,7 +1009,6 @@
             });
         }
 
-        // Vista previa de contenido
         async function previewContent(button, contentType) {
             const messageText = button.parentElement.previousElementSibling.innerText;
             const styleProfile = document.getElementById('styleProfile').value || null;
@@ -1061,7 +1044,6 @@
             }
         }
 
-        // Descargar contenido
         function downloadCurrentContent() {
             if (currentContentType === 'html') {
                 const iframe = document.querySelector('#previewContent iframe');
@@ -1095,7 +1077,6 @@
             }
         }
 
-        // Cerrar modal
         function closeModal() {
             previewModal.style.display = 'none';
             document.getElementById('previewContent').innerHTML = '';
@@ -1103,7 +1084,6 @@
             currentContentType = 'pdf';
         }
 
-        // Limpiar chat
         function clearChat() {
             if (!confirm('¿Estás seguro de que quieres limpiar el chat?')) return;
             chatArea.innerHTML = '';
@@ -1111,9 +1091,9 @@
             saveSessions();
             showToast('Chat limpiado');
             updateSuggestions();
+            socket.emit('clearChat', { sessionId: currentSessionId });
         }
 
-        // Exportar chat
         function exportChat() {
             const messages = sessions[currentSessionId]?.messages || [];
             if (messages.length === 0) {
@@ -1133,7 +1113,6 @@
             showToast('Chat exportado');
         }
 
-        // Cambiar tema
         function toggleTheme() {
             const currentTheme = document.documentElement.getAttribute('data-theme');
             const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
@@ -1143,13 +1122,11 @@
             showToast(`Tema ${newTheme === 'dark' ? 'oscuro' : 'claro'} activado`);
         }
 
-        // Alternar sidebar
         function toggleSidebar() {
             const sidebar = document.getElementById('sidebar');
             sidebar.classList.toggle('hidden');
         }
 
-        // Subir documento
         async function uploadDocument(file) {
             if (!file) return;
             const formData = new FormData();
@@ -1163,7 +1140,7 @@
                 if (data.error) {
                     showToast(`Error: ${data.error}`, 'error');
                 } else {
-                    showToast('Documento analizado y perfil de estilo creado');
+                    showToast('Documento o imagen analizada y perfil de estilo creado');
                     loadStyleProfiles();
                 }
             } catch (error) {
@@ -1171,11 +1148,10 @@
             }
         }
 
-        // Configurar eventos para el área de subida
         uploadArea.addEventListener('click', () => fileInput.click());
         fileInput.addEventListener('change', () => {
             if (fileInput.files.length) {
-                uploadDocument(fileInput.files[0]);
+                Array.from(fileInput.files).forEach(file => uploadDocument(file));
                 fileInput.value = '';
             }
         });
@@ -1189,21 +1165,23 @@
         uploadArea.addEventListener('drop', (e) => {
             e.preventDefault();
             uploadArea.classList.remove('dragover');
-            const file = e.dataTransfer.files[0];
-            if (file && (file.type === 'application/pdf' || file.type === 'text/plain')) {
-                uploadDocument(file);
-            } else {
-                showToast('Por favor, sube un archivo PDF o TXT', 'error');
+            const files = e.dataTransfer.files;
+            if (files.length) {
+                Array.from(files).forEach(file => {
+                    if (['application/pdf', 'text/plain', 'image/jpeg', 'image/png', 'image/jpg'].includes(file.type)) {
+                        uploadDocument(file);
+                    } else {
+                        showToast('Por favor, sube un archivo PDF, TXT o imagen', 'error');
+                    }
+                });
             }
         });
 
-        // Ajustar altura del textarea automáticamente
         promptInput.addEventListener('input', () => {
             promptInput.style.height = '60px';
             promptInput.style.height = `${promptInput.scrollHeight}px`;
         });
 
-        // Enviar mensaje con Enter
         promptInput.addEventListener('keypress', (e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
@@ -1211,33 +1189,58 @@
             }
         });
 
-        // Inicialización al cargar la página
         document.addEventListener('DOMContentLoaded', () => {
-            // Cargar tema guardado
             const savedTheme = localStorage.getItem('theme') || 'light';
             document.documentElement.setAttribute('data-theme', savedTheme);
             document.querySelector('.theme-toggle').textContent = savedTheme === 'dark' ? '☀️' : '🌙';
 
-            // Cargar sesiones y perfiles de estilo
             loadSessions();
             loadStyleProfiles();
             updateSuggestions();
 
-            // Cargar sesión por defecto si existe
             if (sessions[currentSessionId]) {
                 loadSession(currentSessionId);
             }
 
-            // Reintentar mensajes en cola si hay conexión
             if (offlineQueue.length && navigator.onLine) {
                 offlineQueue.forEach(prompt => {
                     promptInput.value = prompt;
                     sendMessage();
                 });
             }
+
+            socket = io.connect('http://localhost:5000');
+            socket.on('connect', () => {
+                socket.emit('joinSession', { sessionId: currentSessionId });
+            });
+            socket.on('newMessage', (data) => {
+                if (data.sessionId === currentSessionId && !sessions[currentSessionId].messages.some(msg => msg.content === data.content)) {
+                    addMessage(data.content, data.isUser, data.contentType, false);
+                }
+            });
+            socket.on('editMessage', (data) => {
+                if (data.sessionId === currentSessionId) {
+                    sessions[currentSessionId].messages = sessions[currentSessionId].messages.map(msg =>
+                        msg.content === data.oldContent ? { ...msg, content: data.newContent } : msg
+                    );
+                    chatArea.innerHTML = '';
+                    sessions[currentSessionId].messages.forEach(msg => addMessage(msg.content, msg.isUser, msg.contentType, false));
+                }
+            });
+            socket.on('clearChat', (data) => {
+                if (data.sessionId === currentSessionId) {
+                    chatArea.innerHTML = '';
+                    sessions[currentSessionId].messages = [];
+                    saveSessions();
+                }
+            });
+
+            setInterval(() => {
+                saveSessions();
+                showToast('Progreso guardado automáticamente');
+            }, 30000);
         });
 
-        // Detectar cambios de conexión
         window.addEventListener('online', () => {
             if (offlineQueue.length) {
                 offlineQueue.forEach(prompt => {
