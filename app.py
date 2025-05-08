@@ -1,5 +1,6 @@
 from flask import Flask, render_template, request, jsonify, send_file, redirect, url_for, flash, Response
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
+from flask_sqlalchemy import SQLAlchemy
 from dotenv import load_dotenv
 import openai
 import os
@@ -13,19 +14,24 @@ from io import BytesIO
 from datetime import datetime
 import re
 import json
-import sqlite3
 import bcrypt
 from collections import Counter
 import statistics
+import uuid
 
 app = Flask(__name__)
-app.secret_key = os.urandom(24)  # Clave secreta para sesiones
+app.secret_key = os.environ.get('SECRET_KEY', os.urandom(24))  # Usar variable de entorno para la clave secreta
 
 # Cargar variables de entorno
 load_dotenv()
 openai_api_key = os.getenv("OPENAI_API_KEY")
 if not openai_api_key:
     raise ValueError("OPENAI_API_KEY no está configurada en las variables de entorno")
+
+# Configurar base de datos PostgreSQL
+app.config['SQLALCHEMY_DATABASE_URI'] = os.environ.get('DATABASE_URL')
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+db = SQLAlchemy(app)
 
 # Configurar cliente OpenAI
 client = openai.OpenAI(api_key=openai_api_key)
@@ -35,114 +41,52 @@ login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login'
 
-# Modelo de usuario
-class User(UserMixin):
-    def __init__(self, id, email):
-        self.id = id
+# Modelos de la base de datos
+class User(UserMixin, db.Model):
+    __tablename__ = 'users'
+    id = db.Column(db.Integer, primary_key=True)
+    email = db.Column(db.String(255), unique=True, nullable=False)
+    password = db.Column(db.String(255), nullable=False)
+
+    def __init__(self, email, password):
         self.email = email
+        self.password = password
+
+class StyleProfile(db.Model):
+    __tablename__ = 'style_profiles'
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    font_name = db.Column(db.String(100))
+    font_size = db.Column(db.Integer)
+    tone = db.Column(db.String(50))
+    margins = db.Column(db.JSON)
+    structure = db.Column(db.JSON)
+    text_color = db.Column(db.String(7), default="#000000")
+    background_color = db.Column(db.String(7), default="#FFFFFF")
+    alignment = db.Column(db.String(20), default="left")
+    line_spacing = db.Column(db.Float, default=1.33)
+    document_purpose = db.Column(db.String(100), default="general")
+    confidence_scores = db.Column(db.JSON, default={})
+
+class Session(db.Model):
+    __tablename__ = 'sessions'
+    id = db.Column(db.String(50), primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    name = db.Column(db.String(100), nullable=False)
+    messages = db.Column(db.JSON, nullable=False, default=[])
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+# Crear tablas en la base de datos
+with app.app_context():
+    db.create_all()
 
 @login_manager.user_loader
 def load_user(user_id):
-    conn = sqlite3.connect('profiles.db')
-    cursor = conn.cursor()
-    cursor.execute('SELECT id, email FROM users WHERE id = ?', (user_id,))
-    user = cursor.fetchone()
-    conn.close()
-    if user:
-        return User(user[0], user[1])
-    return None
+    return User.query.get(int(user_id))
 
-# Definir la versión actual del esquema
-CURRENT_SCHEMA_VERSION = 2
-
-def init_db():
-    """Inicializa la base de datos con las tablas necesarias."""
-    conn = sqlite3.connect('profiles.db')
-    cursor = conn.cursor()
-    
-    # Tabla de usuarios
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            email TEXT UNIQUE NOT NULL,
-            password TEXT NOT NULL
-        )
-    ''')
-    
-    # Tabla para rastrear la versión del esquema
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS schema_version (
-            id INTEGER PRIMARY KEY,
-            version INTEGER NOT NULL
-        )
-    ''')
-    
-    # Tabla de perfiles de estilo (estructura base)
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS style_profiles (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER NOT NULL,
-            font_name TEXT,
-            font_size INTEGER,
-            tone TEXT,
-            margins TEXT,
-            structure TEXT,
-            FOREIGN KEY (user_id) REFERENCES users (id)
-        )
-    ''')
-    
-    conn.commit()
-    conn.close()
-
-def migrate_db():
-    """Verifica y migra la base de datos a la versión actual."""
-    conn = sqlite3.connect('profiles.db')
-    cursor = conn.cursor()
-    
-    # Obtener la versión actual del esquema
-    cursor.execute('SELECT version FROM schema_version WHERE id = 1')
-    result = cursor.fetchone()
-    if result:
-        current_version = result[0]
-    else:
-        # Si no existe, asumir versión 0 e insertar
-        current_version = 0
-        cursor.execute('INSERT INTO schema_version (id, version) VALUES (1, ?)', (current_version,))
-        conn.commit()
-    
-    # Migrar desde la versión actual hasta CURRENT_SCHEMA_VERSION
-    if current_version < 1:
-        # Migración a versión 1: Estructura inicial ya creada en init_db
-        current_version = 1
-    
-    if current_version < 2:
-        # Migración a versión 2: Añadir nuevos campos a style_profiles
-        cursor.execute('ALTER TABLE style_profiles ADD COLUMN text_color TEXT DEFAULT "#000000"')
-        cursor.execute('ALTER TABLE style_profiles ADD COLUMN background_color TEXT DEFAULT "#FFFFFF"')
-        cursor.execute('ALTER TABLE style_profiles ADD COLUMN alignment TEXT DEFAULT "left"')
-        cursor.execute('ALTER TABLE style_profiles ADD COLUMN line_spacing REAL DEFAULT 1.33')
-        cursor.execute('ALTER TABLE style_profiles ADD COLUMN document_purpose TEXT DEFAULT "general"')
-        cursor.execute('ALTER TABLE style_profiles ADD COLUMN confidence_scores TEXT DEFAULT "{}"')
-        current_version = 2
-    
-    # Actualizar la versión del esquema
-    cursor.execute('UPDATE schema_version SET version = ? WHERE id = 1', (CURRENT_SCHEMA_VERSION,))
-    conn.commit()
-    conn.close()
-
-# Ejecutar la inicialización y migración de la base de datos al iniciar la aplicación
-init_db()
-migrate_db()
-
-# Cache para respuestas, sesiones y vistas previas HTML
+# Cache para respuestas y vistas previas HTML
 response_cache = {}
-session_messages = {}  # Almacena mensajes por sesión
-html_previews = {}  # Almacena contenido HTML temporal para vistas previas
-
-def get_db_connection():
-    conn = sqlite3.connect('profiles.db')
-    conn.row_factory = sqlite3.Row
-    return conn
+html_previews = {}
 
 def get_default_style_profile():
     """Devuelve un estilo por defecto para la generación de documentos."""
@@ -157,7 +101,10 @@ def get_default_style_profile():
         'alignment': 'left',
         'line_spacing': 1.33,
         'document_purpose': 'general',
-        'confidence_scores': {'font_name': 1.0, 'font_size': 1.0, 'tone': 0.8, 'margins': 1.0, 'structure': 0.8, 'text_color': 1.0, 'background_color': 1.0, 'alignment': 0.9, 'line_spacing': 0.9, 'document_purpose': 0.7}
+        'confidence_scores': {
+            'font_name': 1.0, 'font_size': 1.0, 'tone': 0.8, 'margins': 1.0, 'structure': 0.8,
+            'text_color': 1.0, 'background_color': 1.0, 'alignment': 0.9, 'line_spacing': 0.9, 'document_purpose': 0.7
+        }
     }
 
 def parse_markdown_to_reportlab(text, style_profile=None):
@@ -243,16 +190,8 @@ def analyze_document(file):
         'line_spacing': 1.33,
         'document_purpose': 'general',
         'confidence_scores': {
-            'font_name': 0.8,
-            'font_size': 0.8,
-            'tone': 0.7,
-            'margins': 0.8,
-            'structure': 0.7,
-            'text_color': 0.8,
-            'background_color': 0.8,
-            'alignment': 0.7,
-            'line_spacing': 0.7,
-            'document_purpose': 0.6
+            'font_name': 0.8, 'font_size': 0.8, 'tone': 0.7, 'margins': 0.8, 'structure': 0.7,
+            'text_color': 0.8, 'background_color': 0.8, 'alignment': 0.7, 'line_spacing': 0.7, 'document_purpose': 0.6
         }
     }
     
@@ -268,24 +207,19 @@ def analyze_document(file):
             structures = set()
             
             for page in pdf.pages:
-                # Extraer texto
                 content += page.extract_text() or ""
-                
-                # Analizar caracteres para fuentes, tamaños y colores
                 chars = page.chars
                 if chars:
                     font_names.extend([char.get('fontname', 'Helvetica').split('-')[0] for char in chars])
                     font_sizes.extend([round(char.get('size', 12)) for char in chars])
                     text_colors.extend([char.get('non_stroking_color', (0, 0, 0)) for char in chars])
                 
-                # Calcular márgenes
                 if page.chars:
                     margins['top'].append(page.bbox[3] - max(c['y1'] for c in page.chars))
                     margins['bottom'].append(min(c['y0'] for c in page.chars) - page.bbox[1])
                     margins['left'].append(min(c['x0'] for c in page.chars) - page.bbox[0])
                     margins['right'].append(page.bbox[2] - max(c['x1'] for c in page.chars))
                 
-                # Detectar alineación y espaciado
                 if page.extract_text():
                     lines = page.extract_text().split('\n')
                     for i in range(len(lines)-1):
@@ -298,7 +232,6 @@ def analyze_document(file):
                         except IndexError:
                             continue
                     
-                    # Estimar alineación basada en posiciones x
                     x_positions = [c['x0'] for c in page.chars]
                     if x_positions:
                         x_variance = statistics.variance(x_positions) if len(x_positions) > 1 else 0
@@ -309,7 +242,6 @@ def analyze_document(file):
                         elif abs(max(x_positions) + min(x_positions) - page.width) < page.width * 0.1:
                             alignments.append('center')
                 
-                # Detectar estructuras
                 if page.extract_tables():
                     structures.add('tables')
                 if page.extract_text():
@@ -321,7 +253,6 @@ def analyze_document(file):
                     if re.search(r'\n\n+', text):
                         structures.add('paragraphs')
             
-            # Normalizar y calcular valores dominantes
             if font_names:
                 font_counter = Counter(font_names)
                 style_profile['font_name'] = font_counter.most_common(1)[0][0]
@@ -334,7 +265,7 @@ def analyze_document(file):
             
             if margins['top']:
                 for key in margins:
-                    style_profile['margins'][key] = statistics.mean(margins[key]) / 72  # Convertir a pulgadas
+                    style_profile['margins'][key] = statistics.mean(margins[key]) / 72
                     style_profile['confidence_scores']['margins'] = min(1.0, len(margins[key]) / len(pdf.pages))
             
             if text_colors:
@@ -357,8 +288,6 @@ def analyze_document(file):
             
             style_profile['structure'] = list(structures)
             style_profile['confidence_scores']['structure'] = 0.9 if structures else 0.7
-            
-            # Asumir fondo blanco (PDFs no siempre proporcionan esta información)
             style_profile['background_color'] = '#FFFFFF'
             style_profile['confidence_scores']['background_color'] = 0.9
         
@@ -366,7 +295,6 @@ def analyze_document(file):
         content = file.read().decode('utf-8', errors='ignore')
         structures = set()
         
-        # Detectar estructuras en TXT
         if re.search(r'^\s*[-*]\s+', content, re.MULTILINE):
             structures.add('lists')
         if re.search(r'^\s*[A-Z].*\n[-=]+', content, re.MULTILINE):
@@ -379,7 +307,6 @@ def analyze_document(file):
         style_profile['structure'] = list(structures)
         style_profile['confidence_scores']['structure'] = 0.8 if structures else 0.6
     
-    # Analizar tono y propósito con OpenAI
     if content:
         try:
             response = client.chat.completions.create(
@@ -407,12 +334,10 @@ def analyze_document(file):
         except Exception as e:
             print(f"Error en análisis de tono: {e}")
     
-    # Normalizar fuentes a las soportadas por ReportLab
     font_mapping = {
         'Times New Roman': 'Times-Roman',
         'Arial': 'Helvetica',
         'Courier New': 'Courier',
-        # Agregar más según sea necesario
     }
     style_profile['font_name'] = font_mapping.get(style_profile['font_name'], style_profile['font_name'])
     
@@ -432,14 +357,9 @@ def login():
         email = request.form['email']
         password = request.form['password']
         
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute('SELECT id, email, password FROM users WHERE email = ?', (email,))
-        user = cursor.fetchone()
-        conn.close()
-        
-        if user and bcrypt.checkpw(password.encode('utf-8'), user['password'].encode('utf-8')):
-            login_user(User(user['id'], user['email']))
+        user = User.query.filter_by(email=email).first()
+        if user and bcrypt.checkpw(password.encode('utf-8'), user.password.encode('utf-8')):
+            login_user(user)
             return redirect(url_for('index'))
         else:
             flash('Correo o contraseña incorrectos', 'error')
@@ -458,14 +378,13 @@ def register():
         hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
         
         try:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute('INSERT INTO users (email, password) VALUES (?, ?)', (email, hashed_password))
-            conn.commit()
-            conn.close()
+            user = User(email=email, password=hashed_password)
+            db.session.add(user)
+            db.session.commit()
             flash('Registro exitoso. Por favor, inicia sesión.', 'success')
             return redirect(url_for('login'))
-        except sqlite3.IntegrityError:
+        except db.IntegrityError:
+            db.session.rollback()
             flash('El correo ya está registrado', 'error')
     
     return render_template('register.html')
@@ -482,7 +401,7 @@ def generate_document():
     try:
         data = request.json
         prompt = data.get('prompt', '')
-        session_id = data.get('session_id', 'default')
+        session_id = data.get('session_id', str(uuid.uuid4()))  # Generar nuevo ID si no se proporciona
         doc_type = data.get('doc_type', 'general')
         tone = data.get('tone', 'neutral')
         length = data.get('length', 'medium')
@@ -497,18 +416,24 @@ def generate_document():
         if cache_key in response_cache:
             return jsonify({
                 'document': response_cache[cache_key],
-                'content_type': 'html' if doc_type == 'html' or 'html' in prompt.lower() else 'pdf'
+                'content_type': 'html' if doc_type == 'html' or 'html' in prompt.lower() else 'pdf',
+                'session_id': session_id
             })
 
-        if session_id not in session_messages:
-            session_messages[session_id] = []
+        # Obtener o crear sesión
+        session = Session.query.filter_by(id=session_id, user_id=current_user.id).first()
+        if not session:
+            session = Session(
+                id=session_id,
+                user_id=current_user.id,
+                name=f"Sesión {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+                messages=[]
+            )
+            db.session.add(session)
 
         style_profile = get_style_profile(style_profile_id)
         
-        # Detectar si el prompt requiere una explicación estructurada
         is_explanatory = re.search(r'^(¿Quién es|¿Qué es|explicar|detallar)\b', prompt, re.IGNORECASE) is not None
-        
-        # Detectar si el prompt solicita HTML
         is_html = doc_type == 'html' or re.search(r'\b(html|página web|sitio web)\b', prompt, re.IGNORECASE) is not None
         
         if is_explanatory:
@@ -581,12 +506,15 @@ def generate_document():
         document = response.choices[0].message.content
         response_cache[cache_key] = document
 
-        session_messages[session_id].append({"role": "user", "content": prompt})
-        session_messages[session_id].append({"role": "assistant", "content": document})
+        # Guardar mensajes en la sesión
+        session.messages.append({"role": "user", "content": prompt, "content_type": doc_type})
+        session.messages.append({"role": "assistant", "content": document, "content_type": 'html' if is_html else 'pdf'})
+        db.session.commit()
 
         return jsonify({
             'document': document,
-            'content_type': 'html' if is_html else 'pdf'
+            'content_type': 'html' if is_html else 'pdf',
+            'session_id': session_id
         })
     except openai.AuthenticationError:
         return jsonify({'error': 'Error de autenticación con OpenAI. Verifica la clave API.'}), 401
@@ -599,24 +527,20 @@ def get_style_profile(profile_id):
     """Obtiene un perfil de estilo o devuelve el estilo por defecto."""
     if not profile_id:
         return get_default_style_profile()
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute('SELECT * FROM style_profiles WHERE id = ? AND user_id = ?', (profile_id, current_user.id))
-    profile = cursor.fetchone()
-    conn.close()
+    profile = StyleProfile.query.filter_by(id=profile_id, user_id=current_user.id).first()
     if profile:
         return {
-            'font_name': profile['font_name'],
-            'font_size': profile['font_size'],
-            'tone': profile['tone'],
-            'margins': json.loads(profile['margins']),
-            'structure': json.loads(profile['structure']),
-            'text_color': profile['text_color'],
-            'background_color': profile['background_color'],
-            'alignment': profile['alignment'],
-            'line_spacing': profile['line_spacing'],
-            'document_purpose': profile['document_purpose'],
-            'confidence_scores': json.loads(profile['confidence_scores'])
+            'font_name': profile.font_name,
+            'font_size': profile.font_size,
+            'tone': profile.tone,
+            'margins': profile.margins,
+            'structure': profile.structure,
+            'text_color': profile.text_color,
+            'background_color': profile.background_color,
+            'alignment': profile.alignment,
+            'line_spacing': profile.line_spacing,
+            'document_purpose': profile.document_purpose,
+            'confidence_scores': profile.confidence_scores
         }
     return get_default_style_profile()
 
@@ -632,12 +556,10 @@ def generate_preview():
             return jsonify({'error': 'El contenido está vacío'}), 400
 
         if content_type == 'html':
-            # Almacenar el contenido HTML temporalmente
             preview_id = f"{current_user.id}:{datetime.now().timestamp()}"
             html_previews[preview_id] = content
             return jsonify({'preview_id': preview_id, 'content_type': 'html'})
         
-        # Generar PDF
         buffer = BytesIO()
         doc = SimpleDocTemplate(
             buffer, 
@@ -674,7 +596,6 @@ def generate_preview():
 @app.route('/preview_html/<preview_id>', methods=['GET'])
 @login_required
 def preview_html(preview_id):
-    """Sirve el contenido HTML para la vista previa."""
     if preview_id in html_previews and preview_id.startswith(f"{current_user.id}:"):
         return Response(html_previews[preview_id], mimetype='text/html')
     return jsonify({'error': 'Vista previa no encontrada'}), 404
@@ -692,33 +613,25 @@ def analyze_document_endpoint():
         
         style_profile, content = analyze_document(file)
         
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute('''
-            INSERT INTO style_profiles (
-                user_id, font_name, font_size, tone, margins, structure, 
-                text_color, background_color, alignment, line_spacing, document_purpose, confidence_scores
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (
-            current_user.id,
-            style_profile['font_name'],
-            style_profile['font_size'],
-            style_profile['tone'],
-            json.dumps(style_profile['margins']),
-            json.dumps(style_profile['structure']),
-            style_profile['text_color'],
-            style_profile['background_color'],
-            style_profile['alignment'],
-            style_profile['line_spacing'],
-            style_profile['document_purpose'],
-            json.dumps(style_profile['confidence_scores'])
-        ))
-        profile_id = cursor.lastrowid
-        conn.commit()
-        conn.close()
+        profile = StyleProfile(
+            user_id=current_user.id,
+            font_name=style_profile['font_name'],
+            font_size=style_profile['font_size'],
+            tone=style_profile['tone'],
+            margins=style_profile['margins'],
+            structure=style_profile['structure'],
+            text_color=style_profile['text_color'],
+            background_color=style_profile['background_color'],
+            alignment=style_profile['alignment'],
+            line_spacing=style_profile['line_spacing'],
+            document_purpose=style_profile['document_purpose'],
+            confidence_scores=style_profile['confidence_scores']
+        )
+        db.session.add(profile)
+        db.session.commit()
         
         return jsonify({
-            'style_profile_id': str(profile_id),
+            'style_profile_id': str(profile.id),
             'style_profile': style_profile,
             'content_summary': content[:500]
         })
@@ -728,26 +641,21 @@ def analyze_document_endpoint():
 @app.route('/style_profiles', methods=['GET'])
 @login_required
 def get_style_profiles():
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute('SELECT * FROM style_profiles WHERE user_id = ?', (current_user.id,))
-    profiles = cursor.fetchall()
-    conn.close()
-    
+    profiles = StyleProfile.query.filter_by(user_id=current_user.id).all()
     result = {}
     for profile in profiles:
-        result[str(profile['id'])] = {
-            'font_name': profile['font_name'],
-            'font_size': profile['font_size'],
-            'tone': profile['tone'],
-            'margins': json.loads(profile['margins']),
-            'structure': json.loads(profile['structure']),
-            'text_color': profile['text_color'],
-            'background_color': profile['background_color'],
-            'alignment': profile['alignment'],
-            'line_spacing': profile['line_spacing'],
-            'document_purpose': profile['document_purpose'],
-            'confidence_scores': json.loads(profile['confidence_scores'])
+        result[str(profile.id)] = {
+            'font_name': profile.font_name,
+            'font_size': profile.font_size,
+            'tone': profile.tone,
+            'margins': profile.margins,
+            'structure': profile.structure,
+            'text_color': profile.text_color,
+            'background_color': profile.background_color,
+            'alignment': profile.alignment,
+            'line_spacing': profile.line_spacing,
+            'document_purpose': profile.document_purpose,
+            'confidence_scores': profile.confidence_scores
         }
     
     return jsonify(result)
@@ -755,29 +663,50 @@ def get_style_profiles():
 @app.route('/style_profiles/<profile_id>', methods=['DELETE'])
 @login_required
 def delete_style_profile(profile_id):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute('DELETE FROM style_profiles WHERE id = ? AND user_id = ?', (profile_id, current_user.id))
-    conn.commit()
-    conn.close()
-    
-    if cursor.rowcount > 0:
+    profile = StyleProfile.query.filter_by(id=profile_id, user_id=current_user.id).first()
+    if profile:
+        db.session.delete(profile)
+        db.session.commit()
         return jsonify({'message': 'Perfil de estilo eliminado'})
     return jsonify({'error': 'Perfil no encontrado'}), 404
 
 @app.route('/purge_style_profiles', methods=['DELETE'])
 @login_required
 def purge_style_profiles():
-    """Elimina todos los perfiles de estilo del usuario autenticado."""
     try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute('DELETE FROM style_profiles WHERE user_id = ?', (current_user.id,))
-        conn.commit()
-        conn.close()
+        StyleProfile.query.filter_by(user_id=current_user.id).delete()
+        db.session.commit()
         return jsonify({'message': 'Todos los perfiles de estilo han sido eliminados'})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+@app.route('/sessions', methods=['GET'])
+@login_required
+def get_sessions():
+    """Obtiene todas las sesiones del usuario autenticado."""
+    sessions = Session.query.filter_by(user_id=current_user.id).all()
+    return jsonify({
+        session.id: {
+            'name': session.name,
+            'messages': session.messages,
+            'created_at': session.created_at.isoformat()
+        } for session in sessions
+    })
+
+@app.route('/session/<session_id>', methods=['GET'])
+@login_required
+def get_session(session_id):
+    """Obtiene una sesión específica por ID."""
+    session = Session.query.filter_by(id=session_id, user_id=current_user.id).first()
+    if not session:
+        return jsonify({'error': 'Sesión no encontrada'}), 404
+    return jsonify({
+        'id': session.id,
+        'name': session.name,
+        'messages': session.messages,
+        'created_at': session.created_at.isoformat()
+    })
+
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port)
