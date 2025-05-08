@@ -11,16 +11,21 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
 from reportlab.lib import colors
 from io import BytesIO
-from datetime import datetime
+from datetime import datetime, timedelta
 import re
 import json
 import bcrypt
 from collections import Counter
 import statistics
 import uuid
+import logging
+
+# Configurar logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-app.secret_key = os.environ.get('SECRET_KEY', os.urandom(24))  # Usar variable de entorno para la clave secreta
+app.secret_key = os.environ.get('SECRET_KEY', os.urandom(24))
 
 # Cargar variables de entorno
 load_dotenv()
@@ -45,17 +50,13 @@ login_manager.login_view = 'login'
 class User(UserMixin, db.Model):
     __tablename__ = 'users'
     id = db.Column(db.Integer, primary_key=True)
-    email = db.Column(db.String(255), unique=True, nullable=False)
+    email = db.Column(db.String(255), unique=True, nullable=False, index=True)
     password = db.Column(db.String(255), nullable=False)
-
-    def __init__(self, email, password):
-        self.email = email
-        self.password = password
 
 class StyleProfile(db.Model):
     __tablename__ = 'style_profiles'
     id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
     font_name = db.Column(db.String(100))
     font_size = db.Column(db.Integer)
     tone = db.Column(db.String(50))
@@ -67,13 +68,23 @@ class StyleProfile(db.Model):
     line_spacing = db.Column(db.Float, default=1.33)
     document_purpose = db.Column(db.String(100), default="general")
     confidence_scores = db.Column(db.JSON, default={})
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
 class Session(db.Model):
     __tablename__ = 'sessions'
     id = db.Column(db.String(50), primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
     name = db.Column(db.String(100), nullable=False)
     messages = db.Column(db.JSON, nullable=False, default=[])
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+class AnalyzedDocument(db.Model):
+    __tablename__ = 'analyzed_documents'
+    id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=False, index=True)
+    filename = db.Column(db.String(255), nullable=False)
+    content = db.Column(db.Text, nullable=False)
+    style_profile_id = db.Column(db.Integer, db.ForeignKey('style_profiles.id'), nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
 # Crear tablas en la base de datos
@@ -88,8 +99,17 @@ def load_user(user_id):
 response_cache = {}
 html_previews = {}
 
+def clean_cache():
+    """Limpia elementos de caché más antiguos que 1 hora."""
+    current_time = datetime.now().timestamp()
+    keys_to_delete = [key for key, value in html_previews.items() if float(key.split(':')[1]) < current_time - 3600]
+    for key in keys_to_delete:
+        del html_previews[key]
+    keys_to_delete = [key for key in response_cache if response_cache[key]['timestamp'] < current_time - 3600]
+    for key in keys_to_delete:
+        del response_cache[key]
+
 def get_default_style_profile():
-    """Devuelve un estilo por defecto para la generación de documentos."""
     return {
         'font_name': 'Helvetica',
         'font_size': 12,
@@ -108,7 +128,6 @@ def get_default_style_profile():
     }
 
 def parse_markdown_to_reportlab(text, style_profile=None):
-    """Convierte Markdown a elementos de reportlab con soporte para estilos personalizados."""
     styles = getSampleStyleSheet()
     style_profile = style_profile or get_default_style_profile()
     font_name = style_profile['font_name']
@@ -167,8 +186,11 @@ def parse_markdown_to_reportlab(text, style_profile=None):
             for line in lines:
                 line = line.replace('\n', '<br />')
                 line = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', line)
-                if line.strip().startswith('- '):
-                    line = f'• {line[2:]}'
+                if re.match(r'^\s*[-*]\s+', line):
+                    line = f'• {line.lstrip("-* ").strip()}'
+                    elements.append(Paragraph(line, body_style))
+                elif re.match(r'^\s*\d+\.\s+', line):
+                    line = f'{line.lstrip("0123456789. ").strip()}'
                     elements.append(Paragraph(line, body_style))
                 else:
                     elements.append(Paragraph(line, bold_style if '**' in line else body_style))
@@ -177,7 +199,6 @@ def parse_markdown_to_reportlab(text, style_profile=None):
     return elements
 
 def analyze_document(file):
-    """Analiza un documento subido para extraer estilo, formato y tipografía con mayor precisión."""
     style_profile = {
         'font_name': 'Helvetica',
         'font_size': 12,
@@ -247,7 +268,9 @@ def analyze_document(file):
                 if page.extract_text():
                     text = page.extract_text()
                     if re.search(r'^\s*[-*]\s+', text, re.MULTILINE):
-                        structures.add('lists')
+                        structures.add('bullet_lists')
+                    if re.search(r'^\s*\d+\.\s+', text, re.MULTILINE):
+                        structures.add('numbered_lists')
                     if re.search(r'^(#+)\s+', text, re.MULTILINE):
                         structures.add('headings')
                     if re.search(r'\n\n+', text):
@@ -296,7 +319,9 @@ def analyze_document(file):
         structures = set()
         
         if re.search(r'^\s*[-*]\s+', content, re.MULTILINE):
-            structures.add('lists')
+            structures.add('bullet_lists')
+        if re.search(r'^\s*\d+\.\s+', content, re.MULTILINE):
+            structures.add('numbered_lists')
         if re.search(r'^\s*[A-Z].*\n[-=]+', content, re.MULTILINE):
             structures.add('headings')
         if re.search(r'\n\n+', content):
@@ -316,10 +341,10 @@ def analyze_document(file):
                         "role": "system",
                         "content": """
                         Analiza el texto proporcionado y devuelve un JSON con:
-                        - 'tone': tono del texto (e.g., formal, informal, técnico, académico, persuasivo, narrativo).
-                        - 'document_purpose': propósito del documento (e.g., informe, carta, manual, artículo, presentación).
+                        - 'tone': tono del texto (formal, informal, técnico, académico, persuasivo, narrativo).
+                        - 'document_purpose': propósito del documento (informe, carta, manual, artículo, presentación, contrato, currículum).
                         - 'confidence': confianza en la predicción (0.0 a 1.0).
-                        Usa el contexto y vocabulario para determinar el tono y propósito.
+                        Usa el contexto, vocabulario, y estructura para determinar el tono y propósito con alta precisión.
                         """
                     },
                     {"role": "user", "content": content[:4000]}
@@ -332,7 +357,7 @@ def analyze_document(file):
             style_profile['confidence_scores']['tone'] = analysis.get('confidence', 0.7)
             style_profile['confidence_scores']['document_purpose'] = analysis.get('confidence', 0.7)
         except Exception as e:
-            print(f"Error en análisis de tono: {e}")
+            logger.error(f"Error en análisis de tono: {e}")
     
     font_mapping = {
         'Times New Roman': 'Times-Roman',
@@ -375,6 +400,10 @@ def register():
         email = request.form['email']
         password = request.form['password']
         
+        if not email or not password:
+            flash('Correo y contraseña son obligatorios', 'error')
+            return render_template('register.html')
+        
         hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
         
         try:
@@ -400,29 +429,40 @@ def logout():
 def generate_document():
     try:
         data = request.json
-        prompt = data.get('prompt', '')
-        session_id = data.get('session_id', str(uuid.uuid4()))  # Generar nuevo ID si no se proporciona
+        prompt = data.get('prompt', '').strip()
+        session_id = data.get('session_id')
         doc_type = data.get('doc_type', 'general')
         tone = data.get('tone', 'neutral')
         length = data.get('length', 'medium')
         language = data.get('language', 'es')
-        style_profile_id = data.get('style_profile_id', None)
+        style_profile_id = data.get('style_profile_id')
         message_history = data.get('message_history', [])
 
+        # Validaciones
         if not prompt:
             return jsonify({'error': 'El prompt está vacío'}), 400
+        if len(prompt) > 10000:
+            return jsonify({'error': 'El prompt excede el límite de 10,000 caracteres'}), 400
+        valid_doc_types = ['general', 'formal_letter', 'report', 'email', 'contract', 'resume', 'html']
+        valid_tones = ['neutral', 'formal', 'informal', 'technical']
+        valid_lengths = ['short', 'medium', 'long']
+        valid_languages = ['es', 'en', 'fr']
+        if doc_type not in valid_doc_types:
+            return jsonify({'error': f'Tipo de documento inválido. Opciones: {valid_doc_types}'}), 400
+        if tone not in valid_tones:
+            return jsonify({'error': f'Tono inválido. Opciones: {valid_tones}'}), 400
+        if length not in valid_lengths:
+            return jsonify({'error': f'Longitud inválida. Opciones: {valid_lengths}'}), 400
+        if language not in valid_languages:
+            return jsonify({'error': f'Idioma inválido. Opciones: {valid_languages}'}), 400
 
-        cache_key = f"{current_user.id}:{session_id}:{prompt}:{doc_type}:{tone}:{length}:{language}:{style_profile_id}"
-        if cache_key in response_cache:
-            return jsonify({
-                'document': response_cache[cache_key],
-                'content_type': 'html' if doc_type == 'html' or 'html' in prompt.lower() else 'pdf',
-                'session_id': session_id
-            })
-
-        # Obtener o crear sesión
-        session = Session.query.filter_by(id=session_id, user_id=current_user.id).first()
-        if not session:
+        # Validar session_id
+        if session_id:
+            session = Session.query.filter_by(id=session_id, user_id=current_user.id).first()
+            if not session:
+                return jsonify({'error': 'Sesión no encontrada o no autorizada'}), 404
+        else:
+            session_id = str(uuid.uuid4())
             session = Session(
                 id=session_id,
                 user_id=current_user.id,
@@ -430,6 +470,15 @@ def generate_document():
                 messages=[]
             )
             db.session.add(session)
+
+        clean_cache()
+        cache_key = f"{current_user.id}:{session_id}:{prompt}:{doc_type}:{tone}:{length}:{language}:{style_profile_id}"
+        if cache_key in response_cache:
+            return jsonify({
+                'document': response_cache[cache_key]['document'],
+                'content_type': response_cache[cache_key]['content_type'],
+                'session_id': session_id
+            })
 
         style_profile = get_style_profile(style_profile_id)
         
@@ -439,10 +488,10 @@ def generate_document():
         if is_explanatory:
             system_prompt = f"""
             Eres GarBotGPT, un asistente que genera documentos profesionales en formato Markdown con una estructura clara para explicaciones.
-            - Tipo de documento: {doc_type} (e.g., explicación, biografía, informe).
-            - Tono: {tone} (formal, informal, técnico).
+            - Tipo de documento: {doc_type}.
+            - Tono: {tone}.
             - Longitud: {length} (corto: ~100 palabras, medio: ~300 palabras, largo: ~600 palabras).
-            - Idioma: {language} (e.g., es para español, en para inglés, fr para francés).
+            - Idioma: {language}.
             - Usa la siguiente estructura en Markdown:
               ```markdown
               # [Tema o Nombre]
@@ -462,34 +511,34 @@ def generate_document():
               [Resumen de la relevancia o importancia del tema.]
               ```
             - Usa encabezados (#, ##), listas (-), negritas (**), y tablas (|...|) cuando sea apropiado.
-            - Estilo: {style_profile}.
-            - Considera el contexto de los mensajes anteriores para mantener coherencia en la conversación.
+            - Estilo: {json.dumps(style_profile)}.
+            - Considera el contexto de los mensajes anteriores para mantener coherencia.
             """
         elif is_html:
             system_prompt = f"""
             Eres GarBotGPT, un asistente que genera páginas web en formato HTML con CSS y JavaScript si es necesario.
             - Tipo de documento: página web (HTML).
-            - Tono: {tone} (formal, informal, técnico).
+            - Tono: {tone}.
             - Longitud: {length} (corto: ~100 líneas, medio: ~300 líneas, largo: ~600 líneas).
-            - Idioma: {language} (e.g., es para español, en para inglés, fr para francés).
+            - Idioma: {language}.
             - Genera código HTML completo con:
               - Estructura semántica (<header>, <main>, <footer>, etc.).
               - Estilos CSS internos (en <style>) adaptados al tono y propósito.
               - JavaScript opcional (en <script>) si el prompt lo requiere.
               - Usa un diseño responsivo y moderno.
-            - Estilo: {style_profile}.
+            - Estilo: {json.dumps(style_profile)}.
             - Considera el contexto de los mensajes anteriores para mantener coherencia.
             """
         else:
             system_prompt = f"""
             Eres GarBotGPT, un asistente que genera documentos profesionales en formato Markdown.
-            - Tipo de documento: {doc_type} (e.g., carta formal, informe, correo, contrato, currículum).
-            - Tono: {tone} (formal, informal, técnico).
+            - Tipo de documento: {doc_type}.
+            - Tono: {tone}.
             - Longitud: {length} (corto: ~100 palabras, medio: ~300 palabras, largo: ~600 palabras).
-            - Idioma: {language} (e.g., es para español, en para inglés, fr para francés).
+            - Idioma: {language}.
             - Usa encabezados (#, ##), listas (-), negritas (**), y tablas (|...|) cuando sea apropiado.
-            - Estilo: {style_profile}.
-            - Considera el contexto de los mensajes anteriores para mantener coherencia en la conversación.
+            - Estilo: {json.dumps(style_profile)}.
+            - Considera el contexto de los mensajes anteriores para mantener coherencia.
             """
         
         messages = [{"role": "system", "content": system_prompt}]
@@ -504,27 +553,30 @@ def generate_document():
         )
 
         document = response.choices[0].message.content
-        response_cache[cache_key] = document
+        content_type = 'html' if is_html else 'pdf'
+        response_cache[cache_key] = {'document': document, 'content_type': content_type, 'timestamp': datetime.now().timestamp()}
 
         # Guardar mensajes en la sesión
         session.messages.append({"role": "user", "content": prompt, "content_type": doc_type})
-        session.messages.append({"role": "assistant", "content": document, "content_type": 'html' if is_html else 'pdf'})
+        session.messages.append({"role": "assistant", "content": document, "content_type": content_type})
         db.session.commit()
 
         return jsonify({
             'document': document,
-            'content_type': 'html' if is_html else 'pdf',
+            'content_type': content_type,
             'session_id': session_id
         })
     except openai.AuthenticationError:
+        logger.error("Error de autenticación con OpenAI")
         return jsonify({'error': 'Error de autenticación con OpenAI. Verifica la clave API.'}), 401
     except openai.RateLimitError:
+        logger.error("Límite de solicitudes alcanzado en OpenAI")
         return jsonify({'error': 'Límite de solicitudes alcanzado. Intenta de nuevo más tarde.'}), 429
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        logger.error(f"Error en /generate: {str(e)}")
+        return jsonify({'error': f'Error interno: {str(e)}'}), 500
 
 def get_style_profile(profile_id):
-    """Obtiene un perfil de estilo o devuelve el estilo por defecto."""
     if not profile_id:
         return get_default_style_profile()
     profile = StyleProfile.query.filter_by(id=profile_id, user_id=current_user.id).first()
@@ -549,12 +601,17 @@ def get_style_profile(profile_id):
 def generate_preview():
     try:
         data = request.json
-        content = data.get('content', '')
+        content = data.get('content', '').strip()
         content_type = data.get('content_type', 'pdf')
-        style_profile_id = data.get('style_profile_id', None)
+        style_profile_id = data.get('style_profile_id')
+        
         if not content:
             return jsonify({'error': 'El contenido está vacío'}), 400
+        if content_type not in ['pdf', 'html']:
+            return jsonify({'error': 'Tipo de contenido inválido. Opciones: pdf, html'}), 400
 
+        clean_cache()
+        
         if content_type == 'html':
             preview_id = f"{current_user.id}:{datetime.now().timestamp()}"
             html_previews[preview_id] = content
@@ -591,11 +648,13 @@ def generate_preview():
             mimetype='application/pdf'
         )
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        logger.error(f"Error en /generate_preview: {str(e)}")
+        return jsonify({'error': f'Error interno: {str(e)}'}), 500
 
 @app.route('/preview_html/<preview_id>', methods=['GET'])
 @login_required
 def preview_html(preview_id):
+    clean_cache()
     if preview_id in html_previews and preview_id.startswith(f"{current_user.id}:"):
         return Response(html_previews[preview_id], mimetype='text/html')
     return jsonify({'error': 'Vista previa no encontrada'}), 404
@@ -611,6 +670,9 @@ def analyze_document_endpoint():
         if not (file.filename.endswith('.pdf') or file.filename.endswith('.txt')):
             return jsonify({'error': 'Formato no soportado. Usa PDF o TXT.'}), 400
         
+        if file.content_length > 10 * 1024 * 1024:  # Límite de 10MB
+            return jsonify({'error': 'El archivo excede el límite de 10MB'}), 400
+
         style_profile, content = analyze_document(file)
         
         profile = StyleProfile(
@@ -628,15 +690,26 @@ def analyze_document_endpoint():
             confidence_scores=style_profile['confidence_scores']
         )
         db.session.add(profile)
+        db.session.flush()
+        
+        analyzed_doc = AnalyzedDocument(
+            user_id=current_user.id,
+            filename=file.filename,
+            content=content,
+            style_profile_id=profile.id
+        )
+        db.session.add(analyzed_doc)
         db.session.commit()
         
         return jsonify({
             'style_profile_id': str(profile.id),
+            'analyzed_document_id': str(analyzed_doc.id),
             'style_profile': style_profile,
             'content_summary': content[:500]
         })
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        logger.error(f"Error en /analyze_document: {str(e)}")
+        return jsonify({'error': f'Error interno: {str(e)}'}), 500
 
 @app.route('/style_profiles', methods=['GET'])
 @login_required
@@ -655,7 +728,8 @@ def get_style_profiles():
             'alignment': profile.alignment,
             'line_spacing': profile.line_spacing,
             'document_purpose': profile.document_purpose,
-            'confidence_scores': profile.confidence_scores
+            'confidence_scores': profile.confidence_scores,
+            'created_at': profile.created_at.isoformat()
         }
     
     return jsonify(result)
@@ -678,12 +752,12 @@ def purge_style_profiles():
         db.session.commit()
         return jsonify({'message': 'Todos los perfiles de estilo han sido eliminados'})
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        logger.error(f"Error en /purge_style_profiles: {str(e)}")
+        return jsonify({'error': f'Error interno: {str(e)}'}), 500
 
 @app.route('/sessions', methods=['GET'])
 @login_required
 def get_sessions():
-    """Obtiene todas las sesiones del usuario autenticado."""
     sessions = Session.query.filter_by(user_id=current_user.id).all()
     return jsonify({
         session.id: {
@@ -696,16 +770,127 @@ def get_sessions():
 @app.route('/session/<session_id>', methods=['GET'])
 @login_required
 def get_session(session_id):
-    """Obtiene una sesión específica por ID."""
     session = Session.query.filter_by(id=session_id, user_id=current_user.id).first()
     if not session:
-        return jsonify({'error': 'Sesión no encontrada'}), 404
+        return jsonify({'error': 'Sesión no encontrada o no autorizada'}), 404
     return jsonify({
         'id': session.id,
         'name': session.name,
         'messages': session.messages,
         'created_at': session.created_at.isoformat()
     })
+
+@app.route('/session', methods=['POST'])
+@login_required
+def create_session():
+    try:
+        data = request.json
+        name = data.get('name', f"Sesión {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        if not name or len(name) > 100:
+            return jsonify({'error': 'El nombre debe tener entre 1 y 100 caracteres'}), 400
+        
+        session_id = str(uuid.uuid4())
+        session = Session(
+            id=session_id,
+            user_id=current_user.id,
+            name=name,
+            messages=[]
+        )
+        db.session.add(session)
+        db.session.commit()
+        return jsonify({
+            'id': session.id,
+            'name': session.name,
+            'messages': session.messages,
+            'created_at': session.created_at.isoformat()
+        })
+    except Exception as e:
+        logger.error(f"Error en /session POST: {str(e)}")
+        return jsonify({'error': f'Error interno: {str(e)}'}), 500
+
+@app.route('/session/<session_id>', methods=['PUT'])
+@login_required
+def update_session(session_id):
+    try:
+        session = Session.query.filter_by(id=session_id, user_id=current_user.id).first()
+        if not session:
+            return jsonify({'error': 'Sesión no encontrada o no autorizada'}), 404
+        
+        data = request.json
+        name = data.get('name')
+        if not name or len(name) > 100:
+            return jsonify({'error': 'El nombre debe tener entre 1 y 100 caracteres'}), 400
+        
+        session.name = name
+        db.session.commit()
+        return jsonify({
+            'id': session.id,
+            'name': session.name,
+            'messages': session.messages,
+            'created_at': session.created_at.isoformat()
+        })
+    except Exception as e:
+        logger.error(f"Error en /session/{session_id} PUT: {str(e)}")
+        return jsonify({'error': f'Error interno: {str(e)}'}), 500
+
+@app.route('/session/<session_id>', methods=['DELETE'])
+@login_required
+def delete_session(session_id):
+    try:
+        session = Session.query.filter_by(id=session_id, user_id=current_user.id).first()
+        if not session:
+            return jsonify({'error': 'Sesión no encontrada o no autorizada'}), 404
+        
+        db.session.delete(session)
+        db.session.commit()
+        return jsonify({'message': 'Sesión eliminada'})
+    except Exception as e:
+        logger.error(f"Error en /session/{session_id} DELETE: {str(e)}")
+        return jsonify({'error': f'Error interno: {str(e)}'}), 500
+
+@app.route('/session/<session_id>/clear', methods=['POST'])
+@login_required
+def clear_session(session_id):
+    try:
+        session = Session.query.filter_by(id=session_id, user_id=current_user.id).first()
+        if not session:
+            return jsonify({'error': 'Sesión no encontrada o no autorizada'}), 404
+        
+        session.messages = []
+        db.session.commit()
+        return jsonify({'message': 'Mensajes de la sesión limpiados'})
+    except Exception as e:
+        logger.error(f"Error en /session/{session_id}/clear: {str(e)}")
+        return jsonify({'error': f'Error interno: {str(e)}'}), 500
+
+@app.route('/analyzed_documents', methods=['GET'])
+@login_required
+def get_analyzed_documents():
+    documents = AnalyzedDocument.query.filter_by(user_id=current_user.id).all()
+    result = {}
+    for doc in documents:
+        result[str(doc.id)] = {
+            'filename': doc.filename,
+            'content_summary': doc.content[:500],
+            'style_profile_id': str(doc.style_profile_id) if doc.style_profile_id else None,
+            'created_at': doc.created_at.isoformat()
+        }
+    return jsonify(result)
+
+@app.route('/analyzed_documents/<doc_id>', methods=['DELETE'])
+@login_required
+def delete_analyzed_document(doc_id):
+    try:
+        doc = AnalyzedDocument.query.filter_by(id=doc_id, user_id=current_user.id).first()
+        if not doc:
+            return jsonify({'error': 'Documento no encontrado o no autorizado'}), 404
+        
+        db.session.delete(doc)
+        db.session.commit()
+        return jsonify({'message': 'Documento analizado eliminado'})
+    except Exception as e:
+        logger.error(f"Error en /analyzed_documents/{doc_id} DELETE: {str(e)}")
+        return jsonify({'error': f'Error interno: {str(e)}'}), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
