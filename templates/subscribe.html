@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Elige tu plan</title>
+    <script src="https://js.stripe.com/v3/"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f4f4f4;
+        }
+        .container {
+            max-width: 600px;
+            margin: 0 auto;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            text-align: center;
+        }
+        .plan {
+            margin: 20px 0;
+            padding: 10px;
+            border: 1px solid #ddd;
+            border-radius: 5px;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            display: block;
+            margin: 10px auto;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        #usage {
+            text-align: center;
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Elige tu plan</h1>
+        <div class="plan">
+            <h3>Básico - 20€/mes</h3>
+            <p>100 documentos generados por mes</p>
+            <button onclick="subscribe('basic')">Suscribirse</button>
+        </div>
+        <div class="plan">
+            <h3>Medio - 40€/mes</h3>
+            <p>500 documentos generados por mes, OCR en imágenes</p>
+            <button onclick="subscribe('medium')">Suscribirse</button>
+        </div>
+        <div class="plan">
+            <h3>Premium - 90€/mes</h3>
+            <p>Uso ilimitado, acceso a todas las funcionalidades</p>
+            <button onclick="subscribe('premium')">Suscribirse</button>
+        </div>
+        <p id="usage"></p>
+    </div>
+
+    <script>
+        const stripe = Stripe('{{ stripe_public_key }}');
+        async function subscribe(plan) {
+            const response = await fetch('/create-subscription', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ plan })
+            });
+            const data = await response.json();
+            if (data.sessionId) {
+                const { error } = await stripe.redirectToCheckout({ sessionId: data.sessionId });
+                if (error) console.error(error);
+            } else {
+                alert(data.error || 'Error al procesar la suscripción.');
+            }
+        }
+
+        async function updateUsage() {
+            const response = await fetch('/check-usage');
+            const data = await response.json();
+            if (data.usage_count !== undefined) {
+                document.getElementById('usage').textContent = `Uso actual: ${data.usage_count}/${data.limit} documentos (Restantes: ${data.remaining})`;
+            } else {
+                document.getElementById('usage').textContent = 'Por favor, suscríbete para comenzar.';
+            }
+        }
+
+        window.onload = updateUsage;
+        setInterval(updateUsage, 5000);
+    </script>
+</body>
+</html>
