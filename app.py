@@ -152,6 +152,7 @@ def init_db():
             plan TEXT,
             usage_count INTEGER DEFAULT 0,
             last_reset TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            status TEXT DEFAULT "pending",
             FOREIGN KEY (user_id) REFERENCES users (id)
         )
     ''')
@@ -227,6 +228,7 @@ def migrate_db():
                 plan TEXT,
                 usage_count INTEGER DEFAULT 0,
                 last_reset TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                status TEXT DEFAULT "pending",
                 FOREIGN KEY (user_id) REFERENCES users (id)
             )
         ''')
@@ -750,18 +752,19 @@ def create_subscription():
             }],
             mode='subscription',
             success_url='http://localhost:5000/subscription-success?session_id={CHECKOUT_SESSION_ID}',
-            cancel_url='http://localhost:5000/subscription-cancel',
+            cancel_url='http://localhost:5000/subscribe',
             customer=customer.id,
         )
         
+        # Guardar la sesión temporalmente, pero no activar la suscripción aún
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute('INSERT OR REPLACE INTO subscriptions (user_id, stripe_subscription_id, plan, usage_count, last_reset) VALUES (?, ?, ?, ?, ?)',
-                       (current_user.id, checkout_session.id, plan, 0, datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+        cursor.execute('INSERT OR REPLACE INTO subscriptions (user_id, stripe_subscription_id, plan, status) VALUES (?, ?, ?, ?)',
+                       (current_user.id, checkout_session.id, plan, 'pending'))
         conn.commit()
         conn.close()
         
-        return jsonify({'sessionId': checkout_session.id})
+        return jsonify({'sessionId': checkout_session.url})
     except Exception as e:
         return jsonify({'error': str(e)}), 400
 
@@ -771,17 +774,43 @@ def subscription_success():
     session_id = request.args.get('session_id')
     if session_id:
         session = stripe.checkout.Session.retrieve(session_id)
-        subscription_id = session.subscription
-        
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute('UPDATE subscriptions SET stripe_subscription_id = ? WHERE user_id = ?',
-                       (subscription_id, current_user.id))
-        conn.commit()
-        conn.close()
-        
-        return "¡Suscripción exitosa! Ahora puedes usar el servicio según tu plan."
+        if session.payment_status == 'paid':
+            subscription = stripe.Subscription.retrieve(session.subscription)
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute('UPDATE subscriptions SET stripe_subscription_id = ?, status = ? WHERE user_id = ?',
+                          (subscription.id, 'active', current_user.id))
+            conn.commit()
+            conn.close()
+            return "¡Suscripción exitosa! Ahora puedes usar el servicio según tu plan."
+        else:
+            return "El pago no se completó correctamente.", 400
     return "Error al procesar la suscripción.", 400
+
+@app.route('/webhook', methods=['POST'])
+def webhook():
+    payload = request.get_data(as_text=True)
+    sig_header = request.headers.get('Stripe-Signature')
+    endpoint_secret = os.getenv('STRIPE_WEBHOOK_SECRET')  # Configura esta variable en .env
+    try:
+        event = stripe.Webhook.construct_event(payload, sig_header, endpoint_secret)
+    except ValueError as e:
+        return jsonify({'error': 'Invalid payload'}), 400
+    except stripe.error.SignatureVerificationError as e:
+        return jsonify({'error': 'Invalid signature'}), 400
+
+    if event['type'] == 'checkout.session.completed':
+        session = event['data']['object']
+        if session['payment_status'] == 'paid':
+            subscription = stripe.Subscription.retrieve(session['subscription'])
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute('UPDATE subscriptions SET stripe_subscription_id = ?, status = ?, last_reset = ? WHERE user_id = ?',
+                          (subscription.id, 'active', datetime.now().strftime('%Y-%m-%d %H:%M:%S'), current_user.id))
+            conn.commit()
+            conn.close()
+
+    return jsonify({'status': 'success'}), 200
 
 @app.route('/subscription-cancel')
 @login_required
