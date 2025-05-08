@@ -171,7 +171,7 @@
             background: var(--ai-bg);
         }
 
-        .purge-styles {
+        .purge-styles, .subscribe-button {
             padding: 10px;
             background: var(--accent-color);
             color: white;
@@ -183,17 +183,39 @@
             transition: all 0.3s ease;
             backdrop-filter: blur(5px);
             -webkit-backdrop-filter: blur(5px);
+            position: relative;
+            text-decoration: none;
+            display: inline-block;
+            text-align: center;
         }
 
-        .purge-styles:hover {
+        .purge-styles:hover, .subscribe-button:hover {
             background: #2563eb;
             transform: translateY(-2px);
             box-shadow: 0 8px 20px rgba(0, 0, 0, 0.3);
         }
 
-        .purge-styles:active {
+        .purge-styles:active, .subscribe-button:active {
             transform: translateY(0);
             box-shadow: var(--shadow);
+        }
+
+        .subscribe-button .tooltip {
+            position: absolute;
+            top: -30px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: var(--toast-bg);
+            color: var(--toast-text);
+            padding: 5px 10px;
+            border-radius: 6px;
+            font-size: 0.8rem;
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+
+        .subscribe-button:hover .tooltip {
+            opacity: 1;
         }
 
         .header {
@@ -655,6 +677,7 @@
                 Arrastra o haz clic para subir un PDF/TXT o imagen
                 <input type="file" id="fileInput" accept=".pdf,.txt,.jpg,.jpeg,.png" style="display: none;" multiple>
             </div>
+            <a href="/subscribe" class="subscribe-button"><span class="tooltip">Suscribirse a un plan</span>Suscribirse</a>
         </div>
         <div class="main">
             <div class="header">
@@ -888,9 +911,9 @@
             } else {
                 // Escapar correctamente los caracteres HTML para evitar inyecciones y problemas de sintaxis
                 const escapedContent = content
-                    .replace(/&/g, '&amp;')
-                    .replace(/</g, '&lt;')
-                    .replace(/>/g, '&gt;');
+                    .replace(/&/g, '&')
+                    .replace(/</g, '<')
+                    .replace(/>/g, '>');
                 const renderedContent = marked.parse(escapedContent);
                 messageDiv.innerHTML = `
                     <div class="ai-message-content">${renderedContent}</div>
