@@ -291,6 +291,7 @@
             align-self: flex-start;
             border-bottom-left-radius: 4px;
             position: relative;
+            cursor: pointer;
         }
 
         .ai-message-content {
@@ -321,7 +322,7 @@
             opacity: 1;
         }
 
-        .copy-button, .preview-button, .reply-button {
+        .copy-button, .preview-button, .edit-button {
             background: none;
             border: none;
             cursor: pointer;
@@ -330,8 +331,45 @@
             transition: all 0.3s ease;
         }
 
-        .copy-button:hover, .preview-button:hover, .reply-button:hover {
+        .copy-button:hover, .preview-button:hover, .edit-button:hover {
             transform: scale(1.2);
+        }
+
+        .edit-area {
+            display: none;
+            width: 100%;
+            padding: 10px;
+            border: 2px solid var(--border-color);
+            border-radius: 8px;
+            background: var(--input-bg);
+            color: var(--text-color);
+            font-size: 1rem;
+            resize: none;
+        }
+
+        .edit-area.active {
+            display: block;
+        }
+
+        .edit-buttons {
+            display: flex;
+            gap: 10px;
+            margin-top: 10px;
+        }
+
+        .save-edit, .cancel-edit {
+            padding: 8px 15px;
+            background: var(--accent-color);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 0.9rem;
+            font-weight: 600;
+        }
+
+        .cancel-edit {
+            background: #6b7280;
         }
 
         .typing {
@@ -799,8 +837,8 @@
                 const session = await response.json();
                 currentSessionId = sessionId;
                 chatArea.innerHTML = '';
-                session.messages.forEach(msg => {
-                    addMessage(msg.content, msg.role === 'user' ? 'user' : 'ai', msg.content_type);
+                session.messages.forEach((msg, index) => {
+                    addMessage(msg.content, msg.role === 'user' ? 'user' : 'ai', msg.content_type, index);
                 });
                 showToast('Sesión cargada');
             } catch (error) {
@@ -1032,7 +1070,7 @@
                     .filter(el => el.classList.contains('message'))
                     .map(el => ({
                         role: el.classList.contains('user-message') ? 'user' : 'assistant',
-                        content: el.querySelector('.ai-message-content')?.innerText || el.innerText,
+                        content: el.querySelector('.ai-message-content')?.innerText || el.querySelector('.message-content')?.innerText || el.innerText,
                         content_type: el.dataset.contentType || 'general'
                     }));
 
@@ -1072,20 +1110,38 @@
             }
         }
 
-        function addMessage(content, type, contentType = 'general') {
+        function addMessage(content, type, contentType = 'general', index = null) {
             const message = document.createElement('div');
             message.className = `message ${type === 'user' ? 'user-message' : 'ai-message'}`;
             message.dataset.contentType = contentType;
+            message.dataset.index = index !== null ? index : chatArea.children.length;
             if (type === 'ai') {
                 message.innerHTML = `
-                    <div class="ai-message-content">${marked.parse(content)}</div>
+                    <div class="message-content ai-message-content">${marked.parse(content)}</div>
                     <div class="message-buttons">
                         <button class="copy-button" onclick="copyMessage(this)">📋</button>
                         <button class="preview-button" onclick="previewMessage(this, '${contentType}')">📄</button>
+                        <button class="edit-button" onclick="editMessage(this)">✏️</button>
+                    </div>
+                    <textarea class="edit-area"></textarea>
+                    <div class="edit-buttons" style="display: none;">
+                        <button class="save-edit" onclick="saveEdit(this)">Guardar</button>
+                        <button class="cancel-edit" onclick="cancelEdit(this)">Cancelar</button>
                     </div>
                 `;
             } else {
-                message.textContent = content;
+                message.innerHTML = `
+                    <div class="message-content">${content}</div>
+                    <div class="message-buttons">
+                        <button class="copy-button" onclick="copyMessage(this)">📋</button>
+                        <button class="edit-button" onclick="editMessage(this)">✏️</button>
+                    </div>
+                    <textarea class="edit-area"></textarea>
+                    <div class="edit-buttons" style="display: none;">
+                        <button class="save-edit" onclick="saveEdit(this)">Guardar</button>
+                        <button class="cancel-edit" onclick="cancelEdit(this)">Cancelar</button>
+                    </div>
+                `;
             }
             chatArea.appendChild(message);
             chatArea.scrollTop = chatArea.scrollHeight;
@@ -1113,17 +1169,19 @@
                         style_profile_id: document.getElementById('styleProfile').value
                     })
                 });
+                
                 if (!response.ok) throw new Error(`Error ${response.status}: ${await response.text()}`);
-                const data = await response.json();
+                
+                const previewContent = document.getElementById('previewContent');
                 if (contentType === 'html') {
-                    const previewContent = document.getElementById('previewContent');
+                    const data = await response.json();
                     previewContent.innerHTML = `<iframe src="/preview_html/${data.preview_id}" style="width:100%;height:500px;border:none;"></iframe>`;
                     currentContentType = 'html';
                     currentContentBlob = new Blob([content], { type: 'text/html' });
                 } else {
                     const blob = await response.blob();
                     const url = URL.createObjectURL(blob);
-                    document.getElementById('previewContent').innerHTML = `<embed src="${url}" width="100%" height="500px" type="application/pdf">`;
+                    previewContent.innerHTML = `<embed src="${url}" width="100%" height="500px" type="application/pdf">`;
                     currentContentType = 'pdf';
                     currentContentBlob = blob;
                 }
@@ -1131,6 +1189,56 @@
             } catch (error) {
                 showToast(`Error al generar vista previa: ${error.message}`, 'error');
             }
+        }
+
+        function editMessage(button) {
+            const message = button.closest('.message');
+            const contentDiv = message.querySelector('.message-content');
+            const editArea = message.querySelector('.edit-area');
+            const editButtons = message.querySelector('.edit-buttons');
+            contentDiv.style.display = 'none';
+            editArea.value = contentDiv.innerText;
+            editArea.classList.add('active');
+            editButtons.style.display = 'flex';
+            message.querySelector('.message-buttons').style.opacity = '0';
+        }
+
+        async function saveEdit(button) {
+            const message = button.closest('.message');
+            const contentDiv = message.querySelector('.message-content');
+            const editArea = message.querySelector('.edit-area');
+            const newContent = editArea.value.trim();
+            if (!newContent) {
+                showToast('El mensaje no puede estar vacío', 'error');
+                return;
+            }
+            try {
+                const response = await fetch(`/session/${currentSessionId}/message/${message.dataset.index}`, {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ content: newContent })
+                });
+                if (!response.ok) throw new Error(`Error ${response.status}: ${await response.text()}`);
+                contentDiv.innerText = newContent;
+                if (message.classList.contains('ai-message')) {
+                    contentDiv.innerHTML = marked.parse(newContent);
+                }
+                contentDiv.style.display = 'block';
+                editArea.classList.remove('active');
+                button.parentElement.style.display = 'none';
+                showToast('Mensaje actualizado');
+            } catch (error) {
+                showToast(`Error al guardar mensaje: ${error.message}`, 'error');
+            }
+        }
+
+        function cancelEdit(button) {
+            const message = button.closest('.message');
+            const contentDiv = message.querySelector('.message-content');
+            const editArea = message.querySelector('.edit-area');
+            contentDiv.style.display = 'block';
+            editArea.classList.remove('active');
+            button.parentElement.style.display = 'none';
         }
 
         function downloadCurrentContent() {
@@ -1185,7 +1293,7 @@
                 .filter(el => el.classList.contains('message'))
                 .map(el => {
                     const role = el.classList.contains('user-message') ? 'Usuario' : 'GarBotGPT';
-                    const content = el.querySelector('.ai-message-content')?.innerText || el.innerText;
+                    const content = el.querySelector('.message-content')?.innerText || el.innerText;
                     return `${role}: ${content}`;
                 }).join('\n\n');
             const blob = new Blob([messages], { type: 'text/plain' });
