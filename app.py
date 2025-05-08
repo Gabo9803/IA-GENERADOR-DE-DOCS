@@ -398,8 +398,13 @@ def login():
         return redirect(url_for('index'))
     
     if request.method == 'POST':
-        email = request.form['email']
-        password = request.form['password']
+        email = request.form.get('email')
+        password = request.form.get('password')
+        
+        if not email or not password:
+            flash('Correo y contraseña son obligatorios', 'error')
+            logger.warning("Intento de login con campos vacíos")
+            return render_template('login.html')
         
         try:
             user = User.query.filter_by(email=email).first()
@@ -422,8 +427,8 @@ def register():
         return redirect(url_for('index'))
     
     if request.method == 'POST':
-        email = request.form['email']
-        password = request.form['password']
+        email = request.form.get('email')
+        password = request.form.get('password')
         
         if not email or not password:
             flash('Correo y contraseña son obligatorios', 'error')
@@ -632,17 +637,17 @@ def get_style_profile(profile_id):
         profile = StyleProfile.query.filter_by(id=profile_id, user_id=current_user.id).first()
         if profile:
             return {
-                'font_name': profile.font_name,
-                'font_size': profile.font_size,
-                'tone': profile.tone,
-                'margins': profile.margins,
-                'structure': profile.structure,
-                'text_color': profile.text_color,
-                'background_color': profile.background_color,
-                'alignment': profile.alignment,
-                'line_spacing': profile.line_spacing,
-                'document_purpose': profile.document_purpose,
-                'confidence_scores': profile.confidence_scores
+                'font_name': profile.font_name or 'Helvetica',
+                'font_size': profile.font_size or 12,
+                'tone': profile.tone or 'neutral',
+                'margins': profile.margins or {'top': 1, 'bottom': 1, 'left': 1, 'right': 1},
+                'structure': profile.structure or ['paragraphs'],
+                'text_color': profile.text_color or '#000000',
+                'background_color': profile.background_color or '#FFFFFF',
+                'alignment': profile.alignment or 'left',
+                'line_spacing': profile.line_spacing or 1.33,
+                'document_purpose': profile.document_purpose or 'general',
+                'confidence_scores': profile.confidence_scores or {}
             }
         logger.warning(f"Perfil de estilo {profile_id} no encontrado para usuario {current_user.id}")
         return get_default_style_profile()
@@ -701,7 +706,7 @@ def generate_preview():
         logger.info("Vista previa PDF generada")
         return send_file(
             buffer,
-            as_attachment=True,
+            as_attachment=False,
             download_name='documento_generado.pdf',
             mimetype='application/pdf'
         )
@@ -967,6 +972,39 @@ def update_session(session_id):
         logger.error(f"Error en /session/{session_id} PUT: {str(e)}")
         return jsonify({'error': f'Error interno: {str(e)}'}), 500
 
+@app.route('/session/<session_id>/message/<int:message_index>', methods=['PUT'])
+@login_required
+def update_session_message(session_id, message_index):
+    try:
+        session = Session.query.filter_by(id=session_id, user_id=current_user.id).first()
+        if not session:
+            logger.warning(f"Sesión {session_id} no encontrada para usuario {current_user.id}")
+            return jsonify({'error': 'Sesión no encontrada o no autorizada'}), 404
+        
+        if message_index < 0 or message_index >= len(session.messages):
+            logger.warning(f"Índice de mensaje inválido: {message_index} en sesión {session_id}")
+            return jsonify({'error': 'Índice de mensaje inválido'}), 400
+        
+        data = request.json
+        new_content = data.get('content', '').strip()
+        if not new_content:
+            logger.warning(f"Contenido vacío recibido para mensaje en sesión {session_id}")
+            return jsonify({'error': 'El contenido no puede estar vacío'}), 400
+        
+        session.messages[message_index]['content'] = new_content
+        db.session.commit()
+        logger.info(f"Mensaje {message_index} actualizado en sesión {session_id} para usuario {current_user.id}")
+        return jsonify({
+            'message': 'Mensaje actualizado',
+            'updated_message': session.messages[message_index]
+        })
+    except db.OperationalError as e:
+        logger.error(f"Error de base de datos en /session/{session_id}/message/{message_index}: {str(e)}")
+        return jsonify({'error': 'Error de base de datos. Por favor, intenta de nuevo.'}), 500
+    except Exception as e:
+        logger.error(f"Error en /session/{session_id}/message/{message_index}: {str(e)}")
+        return jsonify({'error': f'Error interno: {str(e)}'}), 500
+
 @app.route('/session/<session_id>', methods=['DELETE'])
 @login_required
 def delete_session(session_id):
@@ -1047,6 +1085,21 @@ def delete_analyzed_document(doc_id):
         return jsonify({'error': 'Error de base de datos. Por favor, intenta de nuevo.'}), 500
     except Exception as e:
         logger.error(f"Error en /analyzed_documents/{doc_id}: {str(e)}")
+        return jsonify({'error': f'Error interno: {str(e)}'}), 500
+
+@app.route('/analyzed_documents', methods=['DELETE'])
+@login_required
+def purge_analyzed_documents():
+    try:
+        num_deleted = AnalyzedDocument.query.filter_by(user_id=current_user.id).delete()
+        db.session.commit()
+        logger.info(f"Eliminados {num_deleted} documentos analizados para usuario {current_user.id}")
+        return jsonify({'message': f'Todos los documentos analizados han sido eliminados ({num_deleted})'})
+    except db.OperationalError as e:
+        logger.error(f"Error de base de datos en /purge_analyzed_documents: {str(e)}")
+        return jsonify({'error': 'Error de base de datos. Por favor, intenta de nuevo.'}), 500
+    except Exception as e:
+        logger.error(f"Error en /purge_analyzed_documents: {str(e)}")
         return jsonify({'error': f'Error interno: {str(e)}'}), 500
 
 if __name__ == '__main__':
