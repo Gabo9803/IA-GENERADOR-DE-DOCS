@@ -12,3 +12,4 @@ stripe==10.8.0
 opencv-python-headless==4.10.0.84
 Flask-Migrate==4.0.7
 alembic==1.13.2
+eventlet==0.33.3
