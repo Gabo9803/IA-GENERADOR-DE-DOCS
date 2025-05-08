@@ -1,3 +1,6 @@
+import eventlet
+eventlet.monkey_patch()
+
 from flask import Flask, render_template, request, jsonify, send_file, redirect, url_for, flash, Response
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
 from flask_socketio import SocketIO, emit, join_room, leave_room
@@ -58,7 +61,7 @@ class User(UserMixin):
 
 @login_manager.user_loader
 def load_user(user_id):
-    conn = sqlite3.connect('profiles.db')
+    conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute('SELECT id, email FROM users WHERE id = ?', (user_id,))
     user = cursor.fetchone()
@@ -70,9 +73,15 @@ def load_user(user_id):
 # Definir la versión actual del esquema
 CURRENT_SCHEMA_VERSION = 4
 
+def get_db_connection():
+    db_path = os.getenv('RENDER_DB_PATH', 'profiles.db')
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    return conn
+
 def init_db():
     """Inicializa la base de datos con las tablas necesarias."""
-    conn = sqlite3.connect('profiles.db')
+    conn = get_db_connection()
     cursor = conn.cursor()
     
     # Tabla de usuarios
@@ -152,7 +161,7 @@ def init_db():
 
 def migrate_db():
     """Verifica y migra la base de datos a la versión actual."""
-    conn = sqlite3.connect('profiles.db')
+    conn = get_db_connection()
     cursor = conn.cursor()
     
     cursor.execute('SELECT version FROM schema_version WHERE id = 1')
@@ -201,7 +210,7 @@ def migrate_db():
             CREATE TABLE IF NOT EXISTS messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 session_id TEXT NOT NULL,
-                content TEXT NOT NULL,
+                content TEXT NOT NOT NULL,
                 is_user BOOLEAN NOT NULL,
                 content_type TEXT DEFAULT "pdf",
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -233,11 +242,6 @@ migrate_db()
 # Cache para respuestas y vistas previas HTML
 response_cache = {}
 html_previews = {}
-
-def get_db_connection():
-    conn = sqlite3.connect('profiles.db')
-    conn.row_factory = sqlite3.Row
-    return conn
 
 def get_default_style_profile():
     return {
