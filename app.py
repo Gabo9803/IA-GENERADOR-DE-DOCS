@@ -1,5 +1,6 @@
 from flask import Flask, render_template, request, jsonify, send_file, redirect, url_for, flash, Response
 from flask_login import LoginManager, UserMixin, login_user, login_required, logout_user, current_user
+from flask_socketio import SocketIO, emit, join_room, leave_room
 from dotenv import load_dotenv
 import openai
 import os
@@ -18,9 +19,17 @@ import bcrypt
 from collections import Counter
 import statistics
 import uuid
+import base64
+import cv2
+import numpy as np
+from PIL import Image
+import io
 
 app = Flask(__name__)
-app.secret_key = os.urandom(24)  # Clave secreta para sesiones
+app.secret_key = os.urandom(24)
+
+# Configurar Flask-SocketIO
+socketio = SocketIO(app, cors_allowed_origins="*")
 
 # Cargar variables de entorno
 load_dotenv()
@@ -54,7 +63,7 @@ def load_user(user_id):
     return None
 
 # Definir la versión actual del esquema
-CURRENT_SCHEMA_VERSION = 2
+CURRENT_SCHEMA_VERSION = 3
 
 def init_db():
     """Inicializa la base de datos con las tablas necesarias."""
@@ -78,7 +87,7 @@ def init_db():
         )
     ''')
     
-    # Tabla de perfiles de estilo (estructura base)
+    # Tabla de perfiles de estilo
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS style_profiles (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -88,7 +97,36 @@ def init_db():
             tone TEXT,
             margins TEXT,
             structure TEXT,
+            text_color TEXT DEFAULT "#000000",
+            background_color TEXT DEFAULT "#FFFFFF",
+            alignment TEXT DEFAULT "left",
+            line_spacing REAL DEFAULT 1.33,
+            document_purpose TEXT DEFAULT "general",
+            confidence_scores TEXT DEFAULT "{}",
             FOREIGN KEY (user_id) REFERENCES users (id)
+        )
+    ''')
+    
+    # Tabla para sesiones y mensajes
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS sessions (
+            id TEXT PRIMARY KEY,
+            user_id INTEGER NOT NULL,
+            name TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users (id)
+        )
+    ''')
+    
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS messages (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id TEXT NOT NULL,
+            content TEXT NOT NULL,
+            is_user BOOLEAN NOT NULL,
+            content_type TEXT DEFAULT "pdf",
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (session_id) REFERENCES sessions (id)
         )
     ''')
     
@@ -106,18 +144,15 @@ def migrate_db():
     if result:
         current_version = result[0]
     else:
-        # Si no existe, asumir versión 0 e insertar
         current_version = 0
         cursor.execute('INSERT INTO schema_version (id, version) VALUES (1, ?)', (current_version,))
         conn.commit()
     
     # Migrar desde la versión actual hasta CURRENT_SCHEMA_VERSION
     if current_version < 1:
-        # Migración a versión 1: Estructura inicial ya creada en init_db
         current_version = 1
     
     if current_version < 2:
-        # Migración a versión 2: Añadir nuevos campos a style_profiles
         cursor.execute('ALTER TABLE style_profiles ADD COLUMN text_color TEXT DEFAULT "#000000"')
         cursor.execute('ALTER TABLE style_profiles ADD COLUMN background_color TEXT DEFAULT "#FFFFFF"')
         cursor.execute('ALTER TABLE style_profiles ADD COLUMN alignment TEXT DEFAULT "left"')
@@ -126,19 +161,39 @@ def migrate_db():
         cursor.execute('ALTER TABLE style_profiles ADD COLUMN confidence_scores TEXT DEFAULT "{}"')
         current_version = 2
     
-    # Actualizar la versión del esquema
+    if current_version < 3:
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS sessions (
+                id TEXT PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                name TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users (id)
+            )
+        ''')
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS messages (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                content TEXT NOT NULL,
+                is_user BOOLEAN NOT NULL,
+                content_type TEXT DEFAULT "pdf",
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (session_id) REFERENCES sessions (id)
+            )
+        ''')
+        current_version = 3
+    
     cursor.execute('UPDATE schema_version SET version = ? WHERE id = 1', (CURRENT_SCHEMA_VERSION,))
     conn.commit()
     conn.close()
 
-# Ejecutar la inicialización y migración de la base de datos al iniciar la aplicación
 init_db()
 migrate_db()
 
-# Cache para respuestas, sesiones y vistas previas HTML
+# Cache para respuestas y vistas previas HTML
 response_cache = {}
-session_messages = {}  # Almacena mensajes por sesión
-html_previews = {}  # Almacena contenido HTML temporal para vistas previas
+html_previews = {}
 
 def get_db_connection():
     conn = sqlite3.connect('profiles.db')
@@ -146,7 +201,6 @@ def get_db_connection():
     return conn
 
 def get_default_style_profile():
-    """Devuelve un estilo por defecto para la generación de documentos."""
     return {
         'font_name': 'Helvetica',
         'font_size': 12,
@@ -162,7 +216,6 @@ def get_default_style_profile():
     }
 
 def parse_markdown_to_reportlab(text, style_profile=None):
-    """Convierte Markdown a elementos de reportlab con soporte para estilos personalizados."""
     styles = getSampleStyleSheet()
     style_profile = style_profile or get_default_style_profile()
     font_name = style_profile['font_name']
@@ -194,12 +247,11 @@ def parse_markdown_to_reportlab(text, style_profile=None):
     )
     elements = []
 
-    # Soporte para tablas Markdown
     table_pattern = re.compile(r'\|(.+?)\|\n\|[-|:\s]+\|\n((?:\|.+?\|(?:\n|$))+)')
     text_parts = table_pattern.split(text)
     
     for i, part in enumerate(text_parts):
-        if i % 3 == 2:  # Contenido de la tabla
+        if i % 3 == 2:
             rows = [row.strip().split('|')[1:-1] for row in part.strip().split('\n')]
             table_data = [[cell.strip() for cell in row] for row in rows]
             table = Table(table_data)
@@ -216,7 +268,7 @@ def parse_markdown_to_reportlab(text, style_profile=None):
             ]))
             elements.append(table)
             elements.append(Spacer(1, 0.2 * inch))
-        elif i % 3 != 1:  # Texto normal
+        elif i % 3 != 1:
             lines = part.split('\n')
             for line in lines:
                 line = line.replace('\n', '<br />')
@@ -230,8 +282,122 @@ def parse_markdown_to_reportlab(text, style_profile=None):
     
     return elements
 
+def analyze_image(file):
+    """Analiza una imagen para extraer texto usando OCR con OpenAI Vision y determinar estilo."""
+    style_profile = {
+        'font_name': 'Helvetica',
+        'font_size': 12,
+        'margins': {'top': 1, 'bottom': 1, 'left': 1, 'right': 1},
+        'tone': 'neutral',
+        'structure': [],
+        'text_color': '#000000',
+        'background_color': '#FFFFFF',
+        'alignment': 'left',
+        'line_spacing': 1.33,
+        'document_purpose': 'general',
+        'confidence_scores': {
+            'font_name': 0.7,
+            'font_size': 0.7,
+            'tone': 0.6,
+            'margins': 0.7,
+            'structure': 0.6,
+            'text_color': 0.7,
+            'background_color': 0.7,
+            'alignment': 0.6,
+            'line_spacing': 0.6,
+            'document_purpose': 0.5
+        }
+    }
+
+    # Leer la imagen y convertirla a base64
+    image_data = file.read()
+    image = Image.open(io.BytesIO(image_data))
+    
+    # Convertir a base64 para OpenAI Vision
+    buffered = io.BytesIO()
+    image.save(buffered, format="PNG")
+    img_base64 = base64.b64encode(buffered.getvalue()).decode('utf-8')
+    
+    # Extraer texto usando OpenAI Vision
+    try:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {
+                    "role": "system",
+                    "content": """
+                    Eres un asistente que extrae texto de imágenes y analiza su estilo.
+                    - Extrae todo el texto visible en la imagen.
+                    - Analiza el estilo y devuelve un JSON con:
+                      - 'font_name': Nombre de la fuente aproximada (e.g., Helvetica, Times).
+                      - 'font_size': Tamaño de fuente aproximado en puntos.
+                      - 'text_color': Color del texto en formato hexadecimal.
+                      - 'background_color': Color de fondo en formato hexadecimal.
+                      - 'alignment': Alineación del texto (left, center, right, justified).
+                      - 'line_spacing': Espaciado entre líneas (aproximado, como factor).
+                      - 'tone': Tono del texto (formal, informal, técnico).
+                      - 'document_purpose': Propósito del documento (informe, carta, etc.).
+                      - 'confidence': Confianza en las predicciones (0.0 a 1.0).
+                    """
+                },
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Extrae el texto y analiza el estilo de esta imagen."
+                        },
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": f"data:image/png;base64,{img_base64}"
+                            }
+                        }
+                    ]
+                }
+            ],
+            max_tokens=1000
+        )
+        
+        result = response.choices[0].message.content
+        if result.startswith("```json"):
+            result = result[7:-3].strip()
+        analysis = json.loads(result)
+        
+        content = analysis.get('text', '')
+        style_profile['font_name'] = analysis.get('font_name', 'Helvetica')
+        style_profile['font_size'] = analysis.get('font_size', 12)
+        style_profile['text_color'] = analysis.get('text_color', '#000000')
+        style_profile['background_color'] = analysis.get('background_color', '#FFFFFF')
+        style_profile['alignment'] = analysis.get('alignment', 'left')
+        style_profile['line_spacing'] = analysis.get('line_spacing', 1.33)
+        style_profile['tone'] = analysis.get('tone', 'neutral')
+        style_profile['document_purpose'] = analysis.get('document_purpose', 'general')
+        
+        confidence = analysis.get('confidence', {})
+        for key in style_profile['confidence_scores']:
+            style_profile['confidence_scores'][key] = confidence.get(key, style_profile['confidence_scores'][key])
+        
+        # Detectar estructuras básicas
+        if content:
+            structures = set()
+            if re.search(r'^\s*[-*]\s+', content, re.MULTILINE):
+                structures.add('lists')
+            if re.search(r'^\s*[A-Z].*\n[-=]+', content, re.MULTILINE):
+                structures.add('headings')
+            if re.search(r'\n\n+', content):
+                structures.add('paragraphs')
+            style_profile['structure'] = list(structures)
+            style_profile['confidence_scores']['structure'] = 0.8 if structures else 0.6
+        
+        return style_profile, content
+    
+    except Exception as e:
+        print(f"Error en OCR de imagen: {e}")
+        return style_profile, ""
+
 def analyze_document(file):
-    """Analiza un documento subido para extraer estilo, formato y tipografía con mayor precisión."""
+    """Analiza un documento subido para extraer estilo, formato y tipografía."""
     style_profile = {
         'font_name': 'Helvetica',
         'font_size': 12,
@@ -269,24 +435,19 @@ def analyze_document(file):
             structures = set()
             
             for page in pdf.pages:
-                # Extraer texto
                 content += page.extract_text() or ""
-                
-                # Analizar caracteres para fuentes, tamaños y colores
                 chars = page.chars
                 if chars:
                     font_names.extend([char.get('fontname', 'Helvetica').split('-')[0] for char in chars])
                     font_sizes.extend([round(char.get('size', 12)) for char in chars])
                     text_colors.extend([char.get('non_stroking_color', (0, 0, 0)) for char in chars])
                 
-                # Calcular márgenes
                 if page.chars:
                     margins['top'].append(page.bbox[3] - max(c['y1'] for c in page.chars))
                     margins['bottom'].append(min(c['y0'] for c in page.chars) - page.bbox[1])
                     margins['left'].append(min(c['x0'] for c in page.chars) - page.bbox[0])
                     margins['right'].append(page.bbox[2] - max(c['x1'] for c in page.chars))
                 
-                # Detectar alineación y espaciado
                 if page.extract_text():
                     lines = page.extract_text().split('\n')
                     for i in range(len(lines)-1):
@@ -299,7 +460,6 @@ def analyze_document(file):
                         except IndexError:
                             continue
                     
-                    # Estimar alineación basada en posiciones x
                     x_positions = [c['x0'] for c in page.chars]
                     if x_positions:
                         x_variance = statistics.variance(x_positions) if len(x_positions) > 1 else 0
@@ -310,7 +470,6 @@ def analyze_document(file):
                         elif abs(max(x_positions) + min(x_positions) - page.width) < page.width * 0.1:
                             alignments.append('center')
                 
-                # Detectar estructuras
                 if page.extract_tables():
                     structures.add('tables')
                 if page.extract_text():
@@ -322,7 +481,6 @@ def analyze_document(file):
                     if re.search(r'\n\n+', text):
                         structures.add('paragraphs')
             
-            # Normalizar y calcular valores dominantes
             if font_names:
                 font_counter = Counter(font_names)
                 style_profile['font_name'] = font_counter.most_common(1)[0][0]
@@ -335,7 +493,7 @@ def analyze_document(file):
             
             if margins['top']:
                 for key in margins:
-                    style_profile['margins'][key] = statistics.mean(margins[key]) / 72  # Convertir a pulgadas
+                    style_profile['margins'][key] = statistics.mean(margins[key]) / 72
                     style_profile['confidence_scores']['margins'] = min(1.0, len(margins[key]) / len(pdf.pages))
             
             if text_colors:
@@ -359,15 +517,12 @@ def analyze_document(file):
             style_profile['structure'] = list(structures)
             style_profile['confidence_scores']['structure'] = 0.9 if structures else 0.7
             
-            # Asumir fondo blanco (PDFs no siempre proporcionan esta información)
             style_profile['background_color'] = '#FFFFFF'
             style_profile['confidence_scores']['background_color'] = 0.9
         
     elif file.filename.endswith('.txt'):
         content = file.read().decode('utf-8', errors='ignore')
         structures = set()
-        
-        # Detectar estructuras en TXT
         if re.search(r'^\s*[-*]\s+', content, re.MULTILINE):
             structures.add('lists')
         if re.search(r'^\s*[A-Z].*\n[-=]+', content, re.MULTILINE):
@@ -380,7 +535,6 @@ def analyze_document(file):
         style_profile['structure'] = list(structures)
         style_profile['confidence_scores']['structure'] = 0.8 if structures else 0.6
     
-    # Analizar tono y propósito con OpenAI
     if content:
         try:
             response = client.chat.completions.create(
@@ -408,12 +562,10 @@ def analyze_document(file):
         except Exception as e:
             print(f"Error en análisis de tono: {e}")
     
-    # Normalizar fuentes a las soportadas por ReportLab
     font_mapping = {
         'Times New Roman': 'Times-Roman',
         'Arial': 'Helvetica',
         'Courier New': 'Courier',
-        # Agregar más según sea necesario
     }
     style_profile['font_name'] = font_mapping.get(style_profile['font_name'], style_profile['font_name'])
     
@@ -490,9 +642,8 @@ def generate_document():
         language = data.get('language', 'es')
         style_profile_id = data.get('style_profile_id', None)
         message_history = data.get('message_history', [])
-        model = data.get('model', 'gpt-3.5-turbo')  # Modelo por defecto
+        model = data.get('model', 'gpt-3.5-turbo')
 
-        # Validar modelo
         allowed_models = ['gpt-3.5-turbo', 'gpt-4o']
         if model not in allowed_models:
             return jsonify({'error': f'Modelo no válido. Usa uno de: {allowed_models}'}), 400
@@ -508,18 +659,19 @@ def generate_document():
                 'includes_css': response_cache[cache_key].get('includes_css', False)
             })
 
-        if session_id not in session_messages:
-            session_messages[session_id] = []
-
+        # Crear sesión si no existe
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT id FROM sessions WHERE id = ? AND user_id = ?', (session_id, current_user.id))
+        if not cursor.fetchone():
+            cursor.execute('INSERT INTO sessions (id, user_id, name) VALUES (?, ?, ?)', 
+                          (session_id, current_user.id, f"Sesión {session_id}"))
+            conn.commit()
+        
         style_profile = get_style_profile(style_profile_id)
         
-        # Detectar si el prompt requiere una explicación estructurada
         is_explanatory = re.search(r'^(¿Quién es|¿Qué es|explicar|detallar)\b', prompt, re.IGNORECASE) is not None
-        
-        # Detectar si el prompt solicita HTML
         is_html = doc_type == 'html' or re.search(r'\b(html|página web|sitio web)\b', prompt, re.IGNORECASE) is not None
-        
-        # Detectar si el prompt solicita CSS explícitamente
         requests_css = re.search(r'\b(css|estilo|diseño|con estilo)\b', prompt, re.IGNORECASE) is not None
         
         if is_explanatory:
@@ -608,25 +760,46 @@ def generate_document():
         messages.append({"role": "user", "content": prompt})
 
         response = client.chat.completions.create(
-            model=model,  # Usar el modelo seleccionado
+            model=model,
             messages=messages,
-            max_tokens=1500,  # Aumentado para permitir CSS detallado
+            max_tokens=1500,
             temperature=0.7
         )
 
         document = response.choices[0].message.content
+        content_type = 'html' if is_html else 'pdf'
+        
         response_cache[cache_key] = {
             'document': document,
-            'content_type': 'html' if is_html else 'pdf',
+            'content_type': content_type,
             'includes_css': requests_css if is_html else False
         }
 
-        session_messages[session_id].append({"role": "user", "content": prompt})
-        session_messages[session_id].append({"role": "assistant", "content": document})
+        # Guardar mensaje en la base de datos
+        cursor.execute('INSERT INTO messages (session_id, content, is_user, content_type) VALUES (?, ?, ?, ?)',
+                      (session_id, prompt, True, content_type))
+        cursor.execute('INSERT INTO messages (session_id, content, is_user, content_type) VALUES (?, ?, ?, ?)',
+                      (session_id, document, False, content_type))
+        conn.commit()
+        conn.close()
+
+        # Emitir evento de SocketIO para colaboración en tiempo real
+        socketio.emit('newMessage', {
+            'sessionId': session_id,
+            'content': prompt,
+            'isUser': True,
+            'contentType': content_type
+        }, room=session_id)
+        socketio.emit('newMessage', {
+            'sessionId': session_id,
+            'content': document,
+            'isUser': False,
+            'contentType': content_type
+        }, room=session_id)
 
         return jsonify({
             'document': document,
-            'content_type': 'html' if is_html else 'pdf',
+            'content_type': content_type,
             'includes_css': requests_css if is_html else False
         })
     except openai.AuthenticationError:
@@ -637,7 +810,6 @@ def generate_document():
         return jsonify({'error': str(e)}), 500
 
 def get_style_profile(profile_id):
-    """Obtiene un perfil de estilo o devuelve el estilo por defecto."""
     if not profile_id:
         return get_default_style_profile()
     conn = get_db_connection()
@@ -674,16 +846,18 @@ def generate_preview():
             return jsonify({'error': 'El contenido está vacío'}), 400
 
         if content_type == 'html':
-            # Generar un ID único para la vista previa
             preview_id = f"{current_user.id}:{uuid.uuid4()}"
             html_previews[preview_id] = content
+            # Limpiar vistas previas antiguas
+            if len(html_previews) > 100:
+                oldest_key = next(iter(html_previews))
+                del html_previews[oldest_key]
             return jsonify({
                 'preview_id': preview_id,
                 'content_type': 'html',
                 'includes_css': includes_css
             })
         
-        # Generar PDF
         buffer = BytesIO()
         doc = SimpleDocTemplate(
             buffer, 
@@ -720,9 +894,7 @@ def generate_preview():
 @app.route('/preview_html/<preview_id>', methods=['GET'])
 @login_required
 def preview_html(preview_id):
-    """Sirve el contenido HTML para la vista previa como una página renderizable."""
     if preview_id in html_previews and preview_id.startswith(f"{current_user.id}:"):
-        # Asegurarse de que el contenido sea un HTML válido
         html_content = html_previews[preview_id]
         if not html_content.strip().startswith('<!DOCTYPE html>'):
             html_content = f"""<!DOCTYPE html>
@@ -741,10 +913,14 @@ def analyze_document_endpoint():
             return jsonify({'error': 'No se proporcionó ningún archivo'}), 400
         
         file = request.files['file']
-        if not (file.filename.endswith('.pdf') or file.filename.endswith('.txt')):
-            return jsonify({'error': 'Formato no soportado. Usa PDF o TXT.'}), 400
+        if not (file.filename.endswith('.pdf') or file.filename.endswith('.txt') or 
+                file.filename.endswith('.jpg') or file.filename.endswith('.jpeg') or file.filename.endswith('.png')):
+            return jsonify({'error': 'Formato no soportado. Usa PDF, TXT o imagen (JPG, JPEG, PNG).'}), 400
         
-        style_profile, content = analyze_document(file)
+        if file.filename.endswith(('.jpg', '.jpeg', '.png')):
+            style_profile, content = analyze_image(file)
+        else:
+            style_profile, content = analyze_document(file)
         
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -822,7 +998,6 @@ def delete_style_profile(profile_id):
 @app.route('/purge_style_profiles', methods=['DELETE'])
 @login_required
 def purge_style_profiles():
-    """Elimina todos los perfiles de estilo del usuario autenticado."""
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -833,5 +1008,66 @@ def purge_style_profiles():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+# SocketIO Eventos
+@socketio.on('joinSession')
+def on_join(data):
+    session_id = data['sessionId']
+    join_room(session_id)
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('SELECT content, is_user, content_type FROM messages WHERE session_id = ?', (session_id,))
+    messages = cursor.fetchall()
+    conn.close()
+    for msg in messages:
+        emit('newMessage', {
+            'sessionId': session_id,
+            'content': msg['content'],
+            'isUser': msg['is_user'],
+            'contentType': msg['content_type']
+        }, room=session_id)
+
+@socketio.on('newMessage')
+def on_new_message(data):
+    session_id = data['sessionId']
+    content = data['content']
+    is_user = data['isUser']
+    content_type = data['contentType']
+    
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('INSERT INTO messages (session_id, content, is_user, content_type) VALUES (?, ?, ?, ?)',
+                  (session_id, content, is_user, content_type))
+    conn.commit()
+    conn.close()
+    
+    emit('newMessage', data, room=session_id, broadcast=True)
+
+@socketio.on('editMessage')
+def on_edit_message(data):
+    session_id = data['sessionId']
+    old_content = data['oldContent']
+    new_content = data['newContent']
+    
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('UPDATE messages SET content = ? WHERE session_id = ? AND content = ? AND is_user = 1',
+                  (new_content, session_id, old_content))
+    conn.commit()
+    conn.close()
+    
+    emit('editMessage', data, room=session_id, broadcast=True)
+
+@socketio.on('clearChat')
+def on_clear_chat(data):
+    session_id = data['sessionId']
+    
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('DELETE FROM messages WHERE session_id = ?', (session_id,))
+    conn.commit()
+    conn.close()
+    
+    emit('clearChat', data, room=session_id, broadcast=True)
+
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
+    socketio.run(app, host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
