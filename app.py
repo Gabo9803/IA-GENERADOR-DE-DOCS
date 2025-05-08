@@ -24,12 +24,17 @@ import cv2
 import numpy as np
 from PIL import Image
 import io
+import stripe
 
 app = Flask(__name__)
 app.secret_key = os.urandom(24)
 
 # Configurar Flask-SocketIO
 socketio = SocketIO(app, cors_allowed_origins="*")
+
+# Configurar Stripe
+stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
+STRIPE_PUBLIC_KEY = os.getenv("STRIPE_PUBLIC_KEY")
 
 # Cargar variables de entorno
 load_dotenv()
@@ -63,7 +68,7 @@ def load_user(user_id):
     return None
 
 # Definir la versión actual del esquema
-CURRENT_SCHEMA_VERSION = 3
+CURRENT_SCHEMA_VERSION = 4
 
 def init_db():
     """Inicializa la base de datos con las tablas necesarias."""
@@ -130,6 +135,18 @@ def init_db():
         )
     ''')
     
+    # Tabla para suscripciones y uso
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS subscriptions (
+            user_id INTEGER PRIMARY KEY,
+            stripe_subscription_id TEXT,
+            plan TEXT,
+            usage_count INTEGER DEFAULT 0,
+            last_reset TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (user_id) REFERENCES users (id)
+        )
+    ''')
+    
     conn.commit()
     conn.close()
 
@@ -138,7 +155,6 @@ def migrate_db():
     conn = sqlite3.connect('profiles.db')
     cursor = conn.cursor()
     
-    # Obtener la versión actual del esquema
     cursor.execute('SELECT version FROM schema_version WHERE id = 1')
     result = cursor.fetchone()
     if result:
@@ -148,7 +164,6 @@ def migrate_db():
         cursor.execute('INSERT INTO schema_version (id, version) VALUES (1, ?)', (current_version,))
         conn.commit()
     
-    # Migrar desde la versión actual hasta CURRENT_SCHEMA_VERSION
     if current_version < 1:
         current_version = 1
     
@@ -184,6 +199,19 @@ def migrate_db():
         ''')
         current_version = 3
     
+    if current_version < 4:
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS subscriptions (
+                user_id INTEGER PRIMARY KEY,
+                stripe_subscription_id TEXT,
+                plan TEXT,
+                usage_count INTEGER DEFAULT 0,
+                last_reset TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (user_id) REFERENCES users (id)
+            )
+        ''')
+        current_version = 4
+    
     cursor.execute('UPDATE schema_version SET version = ? WHERE id = 1', (CURRENT_SCHEMA_VERSION,))
     conn.commit()
     conn.close()
@@ -212,7 +240,7 @@ def get_default_style_profile():
         'alignment': 'left',
         'line_spacing': 1.33,
         'document_purpose': 'general',
-        'confidence_scores': {'font_name': 1.0, 'font_size': 1.0, 'tone': 0.8, 'margins': 1.0, 'structure': 0.8, 'text_color': 1.0, 'background_color': 1.0, 'alignment': 0.9, 'line_spacing': 0.9, 'document_purpose': 0.7}
+        'confidence_scores': {'font_name': 1.0, 'font_size': 1.0, 'tone': 0.8, 'margins': 1.0, 'structure': 0.8}
     }
 
 def parse_markdown_to_reportlab(text, style_profile=None):
@@ -284,6 +312,16 @@ def parse_markdown_to_reportlab(text, style_profile=None):
 
 def analyze_image(file):
     """Analiza una imagen para extraer texto usando OCR con OpenAI Vision y determinar estilo."""
+    # Verificar suscripción para usar OCR
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('SELECT plan FROM subscriptions WHERE user_id = ?', (current_user.id,))
+    subscription = cursor.fetchone()
+    conn.close()
+    
+    if not subscription or subscription['plan'] == 'basic':
+        raise ValueError("OCR en imágenes requiere una suscripción Medio o Premium.")
+    
     style_profile = {
         'font_name': 'Helvetica',
         'font_size': 12,
@@ -309,16 +347,13 @@ def analyze_image(file):
         }
     }
 
-    # Leer la imagen y convertirla a base64
     image_data = file.read()
     image = Image.open(io.BytesIO(image_data))
     
-    # Convertir a base64 para OpenAI Vision
     buffered = io.BytesIO()
     image.save(buffered, format="PNG")
     img_base64 = base64.b64encode(buffered.getvalue()).decode('utf-8')
     
-    # Extraer texto usando OpenAI Vision
     try:
         response = client.chat.completions.create(
             model="gpt-4o",
@@ -378,7 +413,6 @@ def analyze_image(file):
         for key in style_profile['confidence_scores']:
             style_profile['confidence_scores'][key] = confidence.get(key, style_profile['confidence_scores'][key])
         
-        # Detectar estructuras básicas
         if content:
             structures = set()
             if re.search(r'^\s*[-*]\s+', content, re.MULTILINE):
@@ -571,6 +605,45 @@ def analyze_document(file):
     
     return style_profile, content
 
+def check_usage_limit():
+    """Verifica y actualiza el uso del usuario según su plan."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('SELECT plan, usage_count, last_reset FROM subscriptions WHERE user_id = ?', (current_user.id,))
+    subscription = cursor.fetchone()
+    
+    if not subscription:
+        conn.close()
+        raise ValueError("No tienes una suscripción activa. Suscríbete para continuar.")
+    
+    plan, usage_count, last_reset = subscription['plan'], subscription['usage_count'], subscription['last_reset']
+    last_reset_date = datetime.strptime(last_reset, '%Y-%m-%d %H:%M:%S')
+    current_date = datetime.now()
+    
+    # Reiniciar contador si ha pasado un mes
+    if (current_date - last_reset_date).days >= 30:
+        usage_count = 0
+        cursor.execute('UPDATE subscriptions SET usage_count = ?, last_reset = ? WHERE user_id = ?',
+                       (0, current_date.strftime('%Y-%m-%d %H:%M:%S'), current_user.id))
+        conn.commit()
+    
+    limits = {
+        'basic': 100,
+        'medium': 500,
+        'premium': float('inf')
+    }
+    limit = limits.get(plan, 0)
+    
+    if usage_count >= limit:
+        conn.close()
+        raise ValueError(f"Has alcanzado el límite de uso de tu plan ({plan}: {limit} documentos/mes).")
+    
+    cursor.execute('UPDATE subscriptions SET usage_count = ? WHERE user_id = ?',
+                   (usage_count + 1, current_user.id))
+    conn.commit()
+    conn.close()
+    return True
+
 @app.route('/')
 @login_required
 def index():
@@ -629,10 +702,116 @@ def logout():
     logout_user()
     return redirect(url_for('login'))
 
+@app.route('/subscribe', methods=['GET'])
+@login_required
+def subscribe_page():
+    return render_template('subscribe.html', stripe_public_key=STRIPE_PUBLIC_KEY)
+
+@app.route('/create-subscription', methods=['POST'])
+@login_required
+def create_subscription():
+    try:
+        data = request.json
+        plan = data['plan']
+        
+        price_map = {
+            'basic': 'price_1RMPYvDKDJaukVa6VkwjKGPy',
+            'medium': 'price_1RMPZEDKDJaukVa6EjrpeQX7',
+            'premium': 'price_1RMPZODKDJaukVa6pDmChEZD'
+        }
+        price_id = price_map.get(plan)
+        if not price_id:
+            return jsonify({'error': 'Plan no válido'}), 400
+        
+        customer = stripe.Customer.create(
+            email=current_user.email
+        )
+        
+        checkout_session = stripe.checkout.Session.create(
+            payment_method_types=['card'],
+            line_items=[{
+                'price': price_id,
+                'quantity': 1,
+            }],
+            mode='subscription',
+            success_url='http://localhost:5000/subscription-success?session_id={CHECKOUT_SESSION_ID}',
+            cancel_url='http://localhost:5000/subscription-cancel',
+            customer=customer.id,
+        )
+        
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('INSERT OR REPLACE INTO subscriptions (user_id, stripe_subscription_id, plan, usage_count, last_reset) VALUES (?, ?, ?, ?, ?)',
+                       (current_user.id, checkout_session.id, plan, 0, datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+        conn.commit()
+        conn.close()
+        
+        return jsonify({'sessionId': checkout_session.id})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 400
+
+@app.route('/subscription-success')
+@login_required
+def subscription_success():
+    session_id = request.args.get('session_id')
+    if session_id:
+        session = stripe.checkout.Session.retrieve(session_id)
+        subscription_id = session.subscription
+        
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('UPDATE subscriptions SET stripe_subscription_id = ? WHERE user_id = ?',
+                       (subscription_id, current_user.id))
+        conn.commit()
+        conn.close()
+        
+        return "¡Suscripción exitosa! Ahora puedes usar el servicio según tu plan."
+    return "Error al procesar la suscripción.", 400
+
+@app.route('/subscription-cancel')
+@login_required
+def subscription_cancel():
+    return "Suscripción cancelada. Puedes intentarlo de nuevo."
+
+@app.route('/check-usage', methods=['GET'])
+@login_required
+def check_usage():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    cursor.execute('SELECT plan, usage_count, last_reset FROM subscriptions WHERE user_id = ?', (current_user.id,))
+    subscription = cursor.fetchone()
+    conn.close()
+    
+    if not subscription:
+        return jsonify({'error': 'No tienes una suscripción activa.'}), 403
+    
+    plan, usage_count, last_reset = subscription['plan'], subscription['usage_count'], subscription['last_reset']
+    last_reset_date = datetime.strptime(last_reset, '%Y-%m-%d %H:%M:%S')
+    current_date = datetime.now()
+    
+    if (current_date - last_reset_date).days >= 30:
+        usage_count = 0
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('UPDATE subscriptions SET usage_count = ?, last_reset = ? WHERE user_id = ?',
+                       (0, current_date.strftime('%Y-%m-%d %H:%M:%S'), current_user.id))
+        conn.commit()
+        conn.close()
+    
+    limits = {
+        'basic': 100,
+        'medium': 500,
+        'premium': float('inf')
+    }
+    limit = limits.get(plan, 0)
+    return jsonify({'usage_count': usage_count, 'limit': limit, 'remaining': limit - usage_count})
+
 @app.route('/generate', methods=['POST'])
 @login_required
 def generate_document():
     try:
+        check_usage_limit()  # Verificar y actualizar uso
+        
         data = request.json
         prompt = data.get('prompt', '')
         session_id = data.get('session_id', 'default')
@@ -659,7 +838,6 @@ def generate_document():
                 'includes_css': response_cache[cache_key].get('includes_css', False)
             })
 
-        # Crear sesión si no existe
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute('SELECT id FROM sessions WHERE id = ? AND user_id = ?', (session_id, current_user.id))
@@ -775,7 +953,7 @@ def generate_document():
             'includes_css': requests_css if is_html else False
         }
 
-        # Guardar mensaje en la base de datos
+        cursor = conn.cursor()
         cursor.execute('INSERT INTO messages (session_id, content, is_user, content_type) VALUES (?, ?, ?, ?)',
                       (session_id, prompt, True, content_type))
         cursor.execute('INSERT INTO messages (session_id, content, is_user, content_type) VALUES (?, ?, ?, ?)',
@@ -783,7 +961,6 @@ def generate_document():
         conn.commit()
         conn.close()
 
-        # Emitir evento de SocketIO para colaboración en tiempo real
         socketio.emit('newMessage', {
             'sessionId': session_id,
             'content': prompt,
@@ -802,6 +979,8 @@ def generate_document():
             'content_type': content_type,
             'includes_css': requests_css if is_html else False
         })
+    except ValueError as ve:
+        return jsonify({'error': str(ve)}), 403
     except openai.AuthenticationError:
         return jsonify({'error': 'Error de autenticación con OpenAI. Verifica la clave API.'}), 401
     except openai.RateLimitError:
@@ -837,6 +1016,8 @@ def get_style_profile(profile_id):
 @login_required
 def generate_preview():
     try:
+        check_usage_limit()  # Verificar y actualizar uso
+        
         data = request.json
         content = data.get('content', '')
         content_type = data.get('content_type', 'pdf')
@@ -848,7 +1029,6 @@ def generate_preview():
         if content_type == 'html':
             preview_id = f"{current_user.id}:{uuid.uuid4()}"
             html_previews[preview_id] = content
-            # Limpiar vistas previas antiguas
             if len(html_previews) > 100:
                 oldest_key = next(iter(html_previews))
                 del html_previews[oldest_key]
@@ -888,6 +1068,8 @@ def generate_preview():
             download_name='documento_generado.pdf',
             mimetype='application/pdf'
         )
+    except ValueError as ve:
+        return jsonify({'error': str(ve)}), 403
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -909,6 +1091,8 @@ def preview_html(preview_id):
 @login_required
 def analyze_document_endpoint():
     try:
+        check_usage_limit()  # Verificar y actualizar uso
+        
         if 'file' not in request.files:
             return jsonify({'error': 'No se proporcionó ningún archivo'}), 400
         
@@ -952,6 +1136,8 @@ def analyze_document_endpoint():
             'style_profile': style_profile,
             'content_summary': content[:500]
         })
+    except ValueError as ve:
+        return jsonify({'error': str(ve)}), 403
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -1008,7 +1194,6 @@ def purge_style_profiles():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-# SocketIO Eventos
 @socketio.on('joinSession')
 def on_join(data):
     session_id = data['sessionId']
