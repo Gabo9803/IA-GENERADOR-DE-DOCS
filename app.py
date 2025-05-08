@@ -210,7 +210,7 @@ def migrate_db():
             CREATE TABLE IF NOT EXISTS messages (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 session_id TEXT NOT NULL,
-                content TEXT NOT NOT NULL,
+                content TEXT NOT NULL,
                 is_user BOOLEAN NOT NULL,
                 content_type TEXT DEFAULT "pdf",
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -903,7 +903,7 @@ def generate_document():
                 - Tipo de documento: página web (HTML con CSS).
                 - Tono: {tone} (formal, informal, técnico).
                 - Longitud: {length} (corto: ~100 líneas, medio: ~300 líneas, largo: ~600 líneas).
-                - Idioma: {language} (e.g., es para español, en para inglés, fr para francés).
+            - Idioma: {language} (e.g., es para español, en para inglés, fr para francés).
                 - Genera un archivo HTML completo autocontenido con:
                   - Estructura semántica completa (<header>, <nav>, <main>, <section>, <footer>, etc.).
                   - Metaetiquetas esenciales (<meta charset="UTF-8">, viewport, title).
