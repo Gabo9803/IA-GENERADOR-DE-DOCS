@@ -19,6 +19,7 @@ from collections import Counter
 import statistics
 import uuid
 import logging
+from sqlalchemy.exc import ProgrammingError
 
 # Configurar logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -87,12 +88,31 @@ class AnalyzedDocument(db.Model):
     style_profile_id = db.Column(db.Integer, db.ForeignKey('style_profiles.id'), nullable=True)
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
 
-# Crear tablas en la base de datos
+def ensure_database_schema():
+    """Verifica y corrige el esquema de la base de datos."""
+    try:
+        with app.app_context():
+            inspector = db.inspect(db.engine)
+            columns = inspector.get_columns('style_profiles')
+            column_names = [col['name'] for col in columns]
+            
+            if 'created_at' not in column_names:
+                logger.warning("Columna 'created_at' no encontrada en style_profiles. Agregándola...")
+                with db.engine.connect() as connection:
+                    connection.execute("ALTER TABLE style_profiles ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+                logger.info("Columna 'created_at' agregada exitosamente")
+            
+            db.create_all()
+    except Exception as e:
+        logger.error(f"Error al asegurar el esquema de la base de datos: {str(e)}")
+        raise
+
+# Crear tablas en la base de datos y asegurar el esquema
 try:
     with app.app_context():
-        db.create_all()
+        ensure_database_schema()
 except Exception as e:
-    logger.error(f"Error al crear tablas en la base de datos: {str(e)}")
+    logger.error(f"Error al inicializar la base de datos: {str(e)}")
     raise
 
 @login_manager.user_loader
@@ -824,9 +844,9 @@ def get_style_profiles():
         
         logger.info(f"Devolviendo {len(result)} perfiles de estilo para usuario {current_user.id}")
         return jsonify(result)
-    except db.OperationalError as e:
-        logger.error(f"Error de base de datos en /style_profiles: {str(e)}")
-        return jsonify({'error': 'Error de base de datos. Por favor, intenta de nuevo.'}), 500
+    except ProgrammingError as e:
+        logger.error(f"Error de programación en /style_profiles: {str(e)}")
+        return jsonify({'error': 'Error en el esquema de la base de datos. Contacta al administrador.'}), 500
     except Exception as e:
         logger.error(f"Error en /style_profiles: {str(e)}")
         return jsonify({'error': f'Error interno: {str(e)}'}), 500
