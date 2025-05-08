@@ -71,7 +71,7 @@ def load_user(user_id):
     return None
 
 # Definir la versión actual del esquema
-CURRENT_SCHEMA_VERSION = 4
+CURRENT_SCHEMA_VERSION = 5
 
 def get_db_connection():
     db_path = os.getenv('RENDER_DB_PATH', 'profiles.db')
@@ -178,11 +178,9 @@ def migrate_db():
         current_version = 1
     
     if current_version < 2:
-        # Check existing columns in style_profiles
         cursor.execute('PRAGMA table_info(style_profiles)')
         columns = [col[1] for col in cursor.fetchall()]
         
-        # Add columns only if they don't exist
         if 'text_color' not in columns:
             cursor.execute('ALTER TABLE style_profiles ADD COLUMN text_color TEXT DEFAULT "#000000"')
         if 'background_color' not in columns:
@@ -233,6 +231,19 @@ def migrate_db():
             )
         ''')
         current_version = 4
+    
+    if current_version < 5:
+        # Asegurar que todos los usuarios existentes tengan una suscripción gratuita
+        cursor.execute('SELECT id FROM users')
+        users = cursor.fetchall()
+        for user in users:
+            user_id = user['id']
+            cursor.execute('SELECT user_id FROM subscriptions WHERE user_id = ?', (user_id,))
+            if not cursor.fetchone():
+                cursor.execute('INSERT INTO subscriptions (user_id, plan, status, usage_count, last_reset) VALUES (?, ?, ?, ?, ?)',
+                              (user_id, 'free', 'active', 0, datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+        conn.commit()
+        current_version = 5
     
     cursor.execute('UPDATE schema_version SET version = ? WHERE id = 1', (CURRENT_SCHEMA_VERSION,))
     conn.commit()
@@ -329,15 +340,14 @@ def parse_markdown_to_reportlab(text, style_profile=None):
 
 def analyze_image(file):
     """Analiza una imagen para extraer texto usando OCR con OpenAI Vision y determinar estilo."""
-    # Verificar suscripción para usar OCR
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute('SELECT plan FROM subscriptions WHERE user_id = ?', (current_user.id,))
     subscription = cursor.fetchone()
     conn.close()
     
-    if not subscription or subscription['plan'] == 'basic':
-        raise ValueError("OCR en imágenes requiere una suscripción Medio o Premium.")
+    if not subscription or subscription['plan'] == 'free':
+        raise ValueError("OCR en imágenes requiere una suscripción de pago (básica, media o premium).")
     
     style_profile = {
         'font_name': 'Helvetica',
@@ -626,12 +636,16 @@ def check_usage_limit():
     """Verifica y actualiza el uso del usuario según su plan."""
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute('SELECT plan, usage_count, last_reset FROM subscriptions WHERE user_id = ?', (current_user.id,))
+    cursor.execute('SELECT plan, usage_count, last_reset, status FROM subscriptions WHERE user_id = ?', (current_user.id,))
     subscription = cursor.fetchone()
     
     if not subscription:
         conn.close()
         raise ValueError("No tienes una suscripción activa. Suscríbete para continuar.")
+    
+    if subscription['status'] != 'active':
+        conn.close()
+        raise ValueError("Tu suscripción no está activa. Completa el proceso de suscripción para continuar.")
     
     plan, usage_count, last_reset = subscription['plan'], subscription['usage_count'], subscription['last_reset']
     last_reset_date = datetime.strptime(last_reset, '%Y-%m-%d %H:%M:%S')
@@ -645,6 +659,7 @@ def check_usage_limit():
         conn.commit()
     
     limits = {
+        'free': 50,
         'basic': 100,
         'medium': 500,
         'premium': float('inf')
@@ -704,6 +719,10 @@ def register():
             conn = get_db_connection()
             cursor = conn.cursor()
             cursor.execute('INSERT INTO users (email, password) VALUES (?, ?)', (email, hashed_password))
+            user_id = cursor.lastrowid
+            # Asignar suscripción gratuita al nuevo usuario
+            cursor.execute('INSERT INTO subscriptions (user_id, plan, status, usage_count, last_reset) VALUES (?, ?, ?, ?, ?)',
+                          (user_id, 'free', 'active', 0, datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
             conn.commit()
             conn.close()
             flash('Registro exitoso. Por favor, inicia sesión.', 'success')
@@ -791,7 +810,7 @@ def subscription_success():
 def webhook():
     payload = request.get_data(as_text=True)
     sig_header = request.headers.get('Stripe-Signature')
-    endpoint_secret = os.getenv('STRIPE_WEBHOOK_SECRET')  # Configura esta variable en .env
+    endpoint_secret = os.getenv('STRIPE_WEBHOOK_SECRET')
     try:
         event = stripe.Webhook.construct_event(payload, sig_header, endpoint_secret)
     except ValueError as e:
@@ -822,12 +841,15 @@ def subscription_cancel():
 def check_usage():
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute('SELECT plan, usage_count, last_reset FROM subscriptions WHERE user_id = ?', (current_user.id,))
+    cursor.execute('SELECT plan, usage_count, last_reset, status FROM subscriptions WHERE user_id = ?', (current_user.id,))
     subscription = cursor.fetchone()
     conn.close()
     
     if not subscription:
         return jsonify({'error': 'No tienes una suscripción activa.'}), 403
+    
+    if subscription['status'] != 'active':
+        return jsonify({'error': 'Tu suscripción no está activa.'}), 403
     
     plan, usage_count, last_reset = subscription['plan'], subscription['usage_count'], subscription['last_reset']
     last_reset_date = datetime.strptime(last_reset, '%Y-%m-%d %H:%M:%S')
@@ -843,6 +865,7 @@ def check_usage():
         conn.close()
     
     limits = {
+        'free': 50,
         'basic': 100,
         'medium': 500,
         'premium': float('inf')
@@ -854,7 +877,7 @@ def check_usage():
 @login_required
 def generate_document():
     try:
-        check_usage_limit()  # Verificar y actualizar uso
+        check_usage_limit()
         
         data = request.json
         prompt = data.get('prompt', '')
@@ -1060,7 +1083,7 @@ def get_style_profile(profile_id):
 @login_required
 def generate_preview():
     try:
-        check_usage_limit()  # Verificar y actualizar uso
+        check_usage_limit()
         
         data = request.json
         content = data.get('content', '')
@@ -1135,7 +1158,7 @@ def preview_html(preview_id):
 @login_required
 def analyze_document_endpoint():
     try:
-        check_usage_limit()  # Verificar y actualizar uso
+        check_usage_limit()
         
         if 'file' not in request.files:
             return jsonify({'error': 'No se proporcionó ningún archivo'}), 400
