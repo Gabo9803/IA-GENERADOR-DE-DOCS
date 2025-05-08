@@ -17,7 +17,8 @@ from io import BytesIO
 from datetime import datetime
 import re
 import json
-import sqlite3
+import psycopg2
+import psycopg2.extras
 import bcrypt
 from collections import Counter
 import statistics
@@ -28,6 +29,7 @@ import numpy as np
 from PIL import Image
 import io
 import stripe
+from urllib.parse import urlparse
 
 app = Flask(__name__)
 app.secret_key = os.urandom(24)
@@ -63,20 +65,32 @@ class User(UserMixin):
 def load_user(user_id):
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute('SELECT id, email FROM users WHERE id = ?', (user_id,))
+    cursor.execute('SELECT id, email FROM users WHERE id = %s', (user_id,))
     user = cursor.fetchone()
     conn.close()
     if user:
-        return User(user[0], user[1])
+        return User(user['id'], user['email'])
     return None
 
 # Definir la versión actual del esquema
 CURRENT_SCHEMA_VERSION = 5
 
 def get_db_connection():
-    db_path = os.getenv('RENDER_DB_PATH', 'profiles.db')
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
+    """Establece una conexión con la base de datos PostgreSQL."""
+    database_url = os.getenv('DATABASE_URL')
+    if not database_url:
+        raise ValueError("DATABASE_URL no está configurada en las variables de entorno")
+    
+    parsed_url = urlparse(database_url)
+    conn = psycopg2.connect(
+        dbname=parsed_url.path[1:],
+        user=parsed_url.username,
+        password=parsed_url.password,
+        host=parsed_url.hostname,
+        port=parsed_url.port
+    )
+    conn.set_session(autocommit=False)
+    psycopg2.extras.register_uuid()
     return conn
 
 def init_db():
@@ -87,7 +101,7 @@ def init_db():
     # Tabla de usuarios
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             email TEXT UNIQUE NOT NULL,
             password TEXT NOT NULL
         )
@@ -104,43 +118,43 @@ def init_db():
     # Tabla de perfiles de estilo
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS style_profiles (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             user_id INTEGER NOT NULL,
             font_name TEXT,
             font_size INTEGER,
             tone TEXT,
             margins TEXT,
             structure TEXT,
-            text_color TEXT DEFAULT "#000000",
-            background_color TEXT DEFAULT "#FFFFFF",
-            alignment TEXT DEFAULT "left",
-            line_spacing REAL DEFAULT 1.33,
-            document_purpose TEXT DEFAULT "general",
-            confidence_scores TEXT DEFAULT "{}",
-            FOREIGN KEY (user_id) REFERENCES users (id)
+            text_color TEXT DEFAULT '#000000',
+            background_color TEXT DEFAULT '#FFFFFF',
+            alignment TEXT DEFAULT 'left',
+            line_spacing DOUBLE PRECISION DEFAULT 1.33,
+            document_purpose TEXT DEFAULT 'general',
+            confidence_scores TEXT DEFAULT '{}',
+            FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
         )
     ''')
     
     # Tabla para sesiones y mensajes
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS sessions (
-            id TEXT PRIMARY KEY,
+            id UUID PRIMARY KEY,
             user_id INTEGER NOT NULL,
             name TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (user_id) REFERENCES users (id)
+            FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
         )
     ''')
     
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS messages (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            session_id TEXT NOT NULL,
+            id SERIAL PRIMARY KEY,
+            session_id UUID NOT NULL,
             content TEXT NOT NULL,
             is_user BOOLEAN NOT NULL,
-            content_type TEXT DEFAULT "pdf",
+            content_type TEXT DEFAULT 'pdf',
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (session_id) REFERENCES sessions (id)
+            FOREIGN KEY (session_id) REFERENCES sessions (id) ON DELETE CASCADE
         )
     ''')
     
@@ -152,8 +166,8 @@ def init_db():
             plan TEXT,
             usage_count INTEGER DEFAULT 0,
             last_reset TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            status TEXT DEFAULT "pending",
-            FOREIGN KEY (user_id) REFERENCES users (id)
+            status TEXT DEFAULT 'pending',
+            FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
         )
     ''')
     
@@ -168,52 +182,52 @@ def migrate_db():
     cursor.execute('SELECT version FROM schema_version WHERE id = 1')
     result = cursor.fetchone()
     if result:
-        current_version = result[0]
+        current_version = result['version']
     else:
         current_version = 0
-        cursor.execute('INSERT INTO schema_version (id, version) VALUES (1, ?)', (current_version,))
+        cursor.execute('INSERT INTO schema_version (id, version) VALUES (%s, %s)', (1, current_version))
         conn.commit()
     
     if current_version < 1:
         current_version = 1
     
     if current_version < 2:
-        cursor.execute('PRAGMA table_info(style_profiles)')
-        columns = [col[1] for col in cursor.fetchall()]
+        cursor.execute("SELECT column_name FROM information_schema.columns WHERE table_name = 'style_profiles'")
+        columns = [row['column_name'] for row in cursor.fetchall()]
         
         if 'text_color' not in columns:
-            cursor.execute('ALTER TABLE style_profiles ADD COLUMN text_color TEXT DEFAULT "#000000"')
+            cursor.execute('ALTER TABLE style_profiles ADD COLUMN text_color TEXT DEFAULT %s', ('#000000',))
         if 'background_color' not in columns:
-            cursor.execute('ALTER TABLE style_profiles ADD COLUMN background_color TEXT DEFAULT "#FFFFFF"')
+            cursor.execute('ALTER TABLE style_profiles ADD COLUMN background_color TEXT DEFAULT %s', ('#FFFFFF',))
         if 'alignment' not in columns:
-            cursor.execute('ALTER TABLE style_profiles ADD COLUMN alignment TEXT DEFAULT "left"')
+            cursor.execute('ALTER TABLE style_profiles ADD COLUMN alignment TEXT DEFAULT %s', ('left',))
         if 'line_spacing' not in columns:
-            cursor.execute('ALTER TABLE style_profiles ADD COLUMN line_spacing REAL DEFAULT 1.33')
+            cursor.execute('ALTER TABLE style_profiles ADD COLUMN line_spacing DOUBLE PRECISION DEFAULT %s', (1.33,))
         if 'document_purpose' not in columns:
-            cursor.execute('ALTER TABLE style_profiles ADD COLUMN document_purpose TEXT DEFAULT "general"')
+            cursor.execute('ALTER TABLE style_profiles ADD COLUMN document_purpose TEXT DEFAULT %s', ('general',))
         if 'confidence_scores' not in columns:
-            cursor.execute('ALTER TABLE style_profiles ADD COLUMN confidence_scores TEXT DEFAULT "{}"')
+            cursor.execute('ALTER TABLE style_profiles ADD COLUMN confidence_scores TEXT DEFAULT %s', ('{}',))
         current_version = 2
     
     if current_version < 3:
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS sessions (
-                id TEXT PRIMARY KEY,
+                id UUID PRIMARY KEY,
                 user_id INTEGER NOT NULL,
                 name TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (user_id) REFERENCES users (id)
+                FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
             )
         ''')
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS messages (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id TEXT NOT NULL,
+                id SERIAL PRIMARY KEY,
+                session_id UUID NOT NULL,
                 content TEXT NOT NULL,
                 is_user BOOLEAN NOT NULL,
-                content_type TEXT DEFAULT "pdf",
+                content_type TEXT DEFAULT 'pdf',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (session_id) REFERENCES sessions (id)
+                FOREIGN KEY (session_id) REFERENCES sessions (id) ON DELETE CASCADE
             )
         ''')
         current_version = 3
@@ -226,8 +240,8 @@ def migrate_db():
                 plan TEXT,
                 usage_count INTEGER DEFAULT 0,
                 last_reset TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                status TEXT DEFAULT "pending",
-                FOREIGN KEY (user_id) REFERENCES users (id)
+                status TEXT DEFAULT 'pending',
+                FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
             )
         ''')
         current_version = 4
@@ -238,14 +252,14 @@ def migrate_db():
         users = cursor.fetchall()
         for user in users:
             user_id = user['id']
-            cursor.execute('SELECT user_id FROM subscriptions WHERE user_id = ?', (user_id,))
+            cursor.execute('SELECT user_id FROM subscriptions WHERE user_id = %s', (user_id,))
             if not cursor.fetchone():
-                cursor.execute('INSERT INTO subscriptions (user_id, plan, status, usage_count, last_reset) VALUES (?, ?, ?, ?, ?)',
+                cursor.execute('INSERT INTO subscriptions (user_id, plan, status, usage_count, last_reset) VALUES (%s, %s, %s, %s, %s)',
                               (user_id, 'free', 'active', 0, datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
         conn.commit()
         current_version = 5
     
-    cursor.execute('UPDATE schema_version SET version = ? WHERE id = 1', (CURRENT_SCHEMA_VERSION,))
+    cursor.execute('UPDATE schema_version SET version = %s WHERE id = 1', (CURRENT_SCHEMA_VERSION,))
     conn.commit()
     conn.close()
 
@@ -342,7 +356,7 @@ def analyze_image(file):
     """Analiza una imagen para extraer texto usando OCR con OpenAI Vision y determinar estilo."""
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute('SELECT plan FROM subscriptions WHERE user_id = ?', (current_user.id,))
+    cursor.execute('SELECT plan FROM subscriptions WHERE user_id = %s', (current_user.id,))
     subscription = cursor.fetchone()
     conn.close()
     
@@ -636,7 +650,7 @@ def check_usage_limit():
     """Verifica y actualiza el uso del usuario según su plan."""
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute('SELECT plan, usage_count, last_reset, status FROM subscriptions WHERE user_id = ?', (current_user.id,))
+    cursor.execute('SELECT plan, usage_count, last_reset, status FROM subscriptions WHERE user_id = %s', (current_user.id,))
     subscription = cursor.fetchone()
     
     if not subscription:
@@ -648,13 +662,13 @@ def check_usage_limit():
         raise ValueError("Tu suscripción no está activa. Completa el proceso de suscripción para continuar.")
     
     plan, usage_count, last_reset = subscription['plan'], subscription['usage_count'], subscription['last_reset']
-    last_reset_date = datetime.strptime(last_reset, '%Y-%m-%d %H:%M:%S')
+    last_reset_date = last_reset.replace(tzinfo=None)
     current_date = datetime.now()
     
     # Reiniciar contador si ha pasado un mes
     if (current_date - last_reset_date).days >= 30:
         usage_count = 0
-        cursor.execute('UPDATE subscriptions SET usage_count = ?, last_reset = ? WHERE user_id = ?',
+        cursor.execute('UPDATE subscriptions SET usage_count = %s, last_reset = %s WHERE user_id = %s',
                        (0, current_date.strftime('%Y-%m-%d %H:%M:%S'), current_user.id))
         conn.commit()
     
@@ -670,7 +684,7 @@ def check_usage_limit():
         conn.close()
         raise ValueError(f"Has alcanzado el límite de uso de tu plan ({plan}: {limit} documentos/mes).")
     
-    cursor.execute('UPDATE subscriptions SET usage_count = ? WHERE user_id = ?',
+    cursor.execute('UPDATE subscriptions SET usage_count = %s WHERE user_id = %s',
                    (usage_count + 1, current_user.id))
     conn.commit()
     conn.close()
@@ -692,7 +706,7 @@ def login():
         
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute('SELECT id, email, password FROM users WHERE email = ?', (email,))
+        cursor.execute('SELECT id, email, password FROM users WHERE email = %s', (email,))
         user = cursor.fetchone()
         conn.close()
         
@@ -718,16 +732,18 @@ def register():
         try:
             conn = get_db_connection()
             cursor = conn.cursor()
-            cursor.execute('INSERT INTO users (email, password) VALUES (?, ?)', (email, hashed_password))
-            user_id = cursor.lastrowid
+            cursor.execute('INSERT INTO users (email, password) VALUES (%s, %s) RETURNING id', (email, hashed_password))
+            user_id = cursor.fetchone()['id']
             # Asignar suscripción gratuita al nuevo usuario
-            cursor.execute('INSERT INTO subscriptions (user_id, plan, status, usage_count, last_reset) VALUES (?, ?, ?, ?, ?)',
+            cursor.execute('INSERT INTO subscriptions (user_id, plan, status, usage_count, last_reset) VALUES (%s, %s, %s, %s, %s)',
                           (user_id, 'free', 'active', 0, datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
             conn.commit()
             conn.close()
             flash('Registro exitoso. Por favor, inicia sesión.', 'success')
             return redirect(url_for('login'))
-        except sqlite3.IntegrityError:
+        except psycopg2.errors.UniqueViolation:
+            conn.rollback()
+            conn.close()
             flash('El correo ya está registrado', 'error')
     
     return render_template('register.html')
@@ -778,7 +794,7 @@ def create_subscription():
         # Guardar la sesión temporalmente, pero no activar la suscripción aún
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute('INSERT OR REPLACE INTO subscriptions (user_id, stripe_subscription_id, plan, status) VALUES (?, ?, ?, ?)',
+        cursor.execute('INSERT INTO subscriptions (user_id, stripe_subscription_id, plan, status) VALUES (%s, %s, %s, %s) ON CONFLICT (user_id) DO UPDATE SET stripe_subscription_id = EXCLUDED.stripe_subscription_id, plan = EXCLUDED.plan, status = EXCLUDED.status',
                        (current_user.id, checkout_session.id, plan, 'pending'))
         conn.commit()
         conn.close()
@@ -797,7 +813,7 @@ def subscription_success():
             subscription = stripe.Subscription.retrieve(session.subscription)
             conn = get_db_connection()
             cursor = conn.cursor()
-            cursor.execute('UPDATE subscriptions SET stripe_subscription_id = ?, status = ? WHERE user_id = ?',
+            cursor.execute('UPDATE subscriptions SET stripe_subscription_id = %s, status = %s WHERE user_id = %s',
                           (subscription.id, 'active', current_user.id))
             conn.commit()
             conn.close()
@@ -824,7 +840,7 @@ def webhook():
             subscription = stripe.Subscription.retrieve(session['subscription'])
             conn = get_db_connection()
             cursor = conn.cursor()
-            cursor.execute('UPDATE subscriptions SET stripe_subscription_id = ?, status = ?, last_reset = ? WHERE user_id = ?',
+            cursor.execute('UPDATE subscriptions SET stripe_subscription_id = %s, status = %s, last_reset = %s WHERE user_id = %s',
                           (subscription.id, 'active', datetime.now().strftime('%Y-%m-%d %H:%M:%S'), current_user.id))
             conn.commit()
             conn.close()
@@ -841,7 +857,7 @@ def subscription_cancel():
 def check_usage():
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute('SELECT plan, usage_count, last_reset, status FROM subscriptions WHERE user_id = ?', (current_user.id,))
+    cursor.execute('SELECT plan, usage_count, last_reset, status FROM subscriptions WHERE user_id = %s', (current_user.id,))
     subscription = cursor.fetchone()
     conn.close()
     
@@ -852,14 +868,14 @@ def check_usage():
         return jsonify({'error': 'Tu suscripción no está activa.'}), 403
     
     plan, usage_count, last_reset = subscription['plan'], subscription['usage_count'], subscription['last_reset']
-    last_reset_date = datetime.strptime(last_reset, '%Y-%m-%d %H:%M:%S')
+    last_reset_date = last_reset.replace(tzinfo=None)
     current_date = datetime.now()
     
     if (current_date - last_reset_date).days >= 30:
         usage_count = 0
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute('UPDATE subscriptions SET usage_count = ?, last_reset = ? WHERE user_id = ?',
+        cursor.execute('UPDATE subscriptions SET usage_count = %s, last_reset = %s WHERE user_id = %s',
                        (0, current_date.strftime('%Y-%m-%d %H:%M:%S'), current_user.id))
         conn.commit()
         conn.close()
@@ -907,10 +923,16 @@ def generate_document():
 
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute('SELECT id FROM sessions WHERE id = ? AND user_id = ?', (session_id, current_user.id))
+        try:
+            session_id_uuid = uuid.UUID(session_id)
+        except ValueError:
+            session_id_uuid = uuid.uuid4()
+            session_id = str(session_id_uuid)
+        
+        cursor.execute('SELECT id FROM sessions WHERE id = %s AND user_id = %s', (session_id_uuid, current_user.id))
         if not cursor.fetchone():
-            cursor.execute('INSERT INTO sessions (id, user_id, name) VALUES (?, ?, ?)', 
-                          (session_id, current_user.id, f"Sesión {session_id}"))
+            cursor.execute('INSERT INTO sessions (id, user_id, name) VALUES (%s, %s, %s)', 
+                          (session_id_uuid, current_user.id, f"Sesión {session_id}"))
             conn.commit()
         
         style_profile = get_style_profile(style_profile_id)
@@ -1020,11 +1042,10 @@ def generate_document():
             'includes_css': requests_css if is_html else False
         }
 
-        cursor = conn.cursor()
-        cursor.execute('INSERT INTO messages (session_id, content, is_user, content_type) VALUES (?, ?, ?, ?)',
-                      (session_id, prompt, True, content_type))
-        cursor.execute('INSERT INTO messages (session_id, content, is_user, content_type) VALUES (?, ?, ?, ?)',
-                      (session_id, document, False, content_type))
+        cursor.execute('INSERT INTO messages (session_id, content, is_user, content_type) VALUES (%s, %s, %s, %s)',
+                      (session_id_uuid, prompt, True, content_type))
+        cursor.execute('INSERT INTO messages (session_id, content, is_user, content_type) VALUES (%s, %s, %s, %s)',
+                      (session_id_uuid, document, False, content_type))
         conn.commit()
         conn.close()
 
@@ -1060,7 +1081,7 @@ def get_style_profile(profile_id):
         return get_default_style_profile()
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute('SELECT * FROM style_profiles WHERE id = ? AND user_id = ?', (profile_id, current_user.id))
+    cursor.execute('SELECT * FROM style_profiles WHERE id = %s AND user_id = %s', (profile_id, current_user.id))
     profile = cursor.fetchone()
     conn.close()
     if profile:
@@ -1179,7 +1200,7 @@ def analyze_document_endpoint():
             INSERT INTO style_profiles (
                 user_id, font_name, font_size, tone, margins, structure, 
                 text_color, background_color, alignment, line_spacing, document_purpose, confidence_scores
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING id
         ''', (
             current_user.id,
             style_profile['font_name'],
@@ -1194,7 +1215,7 @@ def analyze_document_endpoint():
             style_profile['document_purpose'],
             json.dumps(style_profile['confidence_scores'])
         ))
-        profile_id = cursor.lastrowid
+        profile_id = cursor.fetchone()['id']
         conn.commit()
         conn.close()
         
@@ -1213,7 +1234,7 @@ def analyze_document_endpoint():
 def get_style_profiles():
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute('SELECT * FROM style_profiles WHERE user_id = ?', (current_user.id,))
+    cursor.execute('SELECT * FROM style_profiles WHERE user_id = %s', (current_user.id,))
     profiles = cursor.fetchall()
     conn.close()
     
@@ -1240,11 +1261,12 @@ def get_style_profiles():
 def delete_style_profile(profile_id):
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute('DELETE FROM style_profiles WHERE id = ? AND user_id = ?', (profile_id, current_user.id))
+    cursor.execute('DELETE FROM style_profiles WHERE id = %s AND user_id = %s', (profile_id, current_user.id))
+    deleted_rows = cursor.rowcount
     conn.commit()
     conn.close()
     
-    if cursor.rowcount > 0:
+    if deleted_rows > 0:
         return jsonify({'message': 'Perfil de estilo eliminado'})
     return jsonify({'error': 'Perfil no encontrado'}), 404
 
@@ -1254,7 +1276,7 @@ def purge_style_profiles():
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute('DELETE FROM style_profiles WHERE user_id = ?', (current_user.id,))
+        cursor.execute('DELETE FROM style_profiles WHERE user_id = %s', (current_user.id,))
         conn.commit()
         conn.close()
         return jsonify({'message': 'Todos los perfiles de estilo han sido eliminados'})
@@ -1267,7 +1289,13 @@ def on_join(data):
     join_room(session_id)
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute('SELECT content, is_user, content_type FROM messages WHERE session_id = ?', (session_id,))
+    try:
+        session_id_uuid = uuid.UUID(session_id)
+    except ValueError:
+        session_id_uuid = uuid.uuid4()
+        session_id = str(session_id_uuid)
+    
+    cursor.execute('SELECT content, is_user, content_type FROM messages WHERE session_id = %s', (session_id_uuid,))
     messages = cursor.fetchall()
     conn.close()
     for msg in messages:
@@ -1287,8 +1315,14 @@ def on_new_message(data):
     
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute('INSERT INTO messages (session_id, content, is_user, content_type) VALUES (?, ?, ?, ?)',
-                  (session_id, content, is_user, content_type))
+    try:
+        session_id_uuid = uuid.UUID(session_id)
+    except ValueError:
+        session_id_uuid = uuid.uuid4()
+        session_id = str(session_id_uuid)
+    
+    cursor.execute('INSERT INTO messages (session_id, content, is_user, content_type) VALUES (%s, %s, %s, %s)',
+                  (session_id_uuid, content, is_user, content_type))
     conn.commit()
     conn.close()
     
@@ -1302,8 +1336,14 @@ def on_edit_message(data):
     
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute('UPDATE messages SET content = ? WHERE session_id = ? AND content = ? AND is_user = 1',
-                  (new_content, session_id, old_content))
+    try:
+        session_id_uuid = uuid.UUID(session_id)
+    except ValueError:
+        session_id_uuid = uuid.uuid4()
+        session_id = str(session_id_uuid)
+    
+    cursor.execute('UPDATE messages SET content = %s WHERE session_id = %s AND content = %s AND is_user = TRUE',
+                  (new_content, session_id_uuid, old_content))
     conn.commit()
     conn.close()
     
@@ -1315,7 +1355,13 @@ def on_clear_chat(data):
     
     conn = get_db_connection()
     cursor = conn.cursor()
-    cursor.execute('DELETE FROM messages WHERE session_id = ?', (session_id,))
+    try:
+        session_id_uuid = uuid.UUID(session_id)
+    except ValueError:
+        session_id_uuid = uuid.uuid4()
+        session_id = str(session_id_uuid)
+    
+    cursor.execute('DELETE FROM messages WHERE session_id = %s', (session_id_uuid,))
     conn.commit()
     conn.close()
     
