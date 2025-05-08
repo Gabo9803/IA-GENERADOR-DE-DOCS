@@ -20,37 +20,40 @@ from collections import Counter
 import statistics
 import uuid
 import base64
-import cv2
-import numpy as np
 from PIL import Image
 import io
 import stripe
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
-app.secret_key = os.urandom(24)
+app.secret_key = os.environ.get('FLASK_SECRET_KEY', os.urandom(24))
 
-# Configurar Flask-SocketIO
-socketio = SocketIO(app, cors_allowed_origins="*")
+# Configure Flask-SocketIO
+socketio = SocketIO(app, cors_allowed_origins=["https://fgarola.site"], async_mode='gevent')
 
-# Configurar Stripe
+# Configure Stripe
 stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
 STRIPE_PUBLIC_KEY = os.getenv("STRIPE_PUBLIC_KEY")
 
-# Cargar variables de entorno
+# Load environment variables
 load_dotenv()
 openai_api_key = os.getenv("OPENAI_API_KEY")
 if not openai_api_key:
-    raise ValueError("OPENAI_API_KEY no está configurada en las variables de entorno")
+    raise ValueError("OPENAI_API_KEY not configured in environment variables")
 
-# Configurar cliente OpenAI
+# Configure OpenAI client
 client = openai.OpenAI(api_key=openai_api_key)
 
-# Configurar Flask-Login
+# Configure Flask-Login
 login_manager = LoginManager()
 login_manager.init_app(app)
 login_manager.login_view = 'login'
 
-# Modelo de usuario
+# User model
 class User(UserMixin):
     def __init__(self, id, email):
         self.id = id
@@ -67,15 +70,14 @@ def load_user(user_id):
         return User(user[0], user[1])
     return None
 
-# Definir la versión actual del esquema
+# Database schema version
 CURRENT_SCHEMA_VERSION = 4
 
 def init_db():
-    """Inicializa la base de datos con las tablas necesarias."""
+    """Initialize the database with necessary tables."""
     conn = sqlite3.connect('profiles.db')
     cursor = conn.cursor()
     
-    # Tabla de usuarios
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -84,7 +86,6 @@ def init_db():
         )
     ''')
     
-    # Tabla para rastrear la versión del esquema
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS schema_version (
             id INTEGER PRIMARY KEY,
@@ -92,7 +93,6 @@ def init_db():
         )
     ''')
     
-    # Tabla de perfiles de estilo
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS style_profiles (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -112,7 +112,6 @@ def init_db():
         )
     ''')
     
-    # Tabla para sesiones y mensajes
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS sessions (
             id TEXT PRIMARY KEY,
@@ -135,7 +134,6 @@ def init_db():
         )
     ''')
     
-    # Tabla para suscripciones y uso
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS subscriptions (
             user_id INTEGER PRIMARY KEY,
@@ -151,7 +149,7 @@ def init_db():
     conn.close()
 
 def migrate_db():
-    """Verifica y migra la base de datos a la versión actual."""
+    """Migrate the database to the current schema version."""
     conn = sqlite3.connect('profiles.db')
     cursor = conn.cursor()
     
@@ -168,11 +166,8 @@ def migrate_db():
         current_version = 1
     
     if current_version < 2:
-        # Check existing columns in style_profiles
         cursor.execute('PRAGMA table_info(style_profiles)')
         columns = [col[1] for col in cursor.fetchall()]
-        
-        # Add columns only if they don't exist
         if 'text_color' not in columns:
             cursor.execute('ALTER TABLE style_profiles ADD COLUMN text_color TEXT DEFAULT "#000000"')
         if 'background_color' not in columns:
@@ -230,7 +225,7 @@ def migrate_db():
 init_db()
 migrate_db()
 
-# Cache para respuestas y vistas previas HTML
+# Cache for responses and HTML previews
 response_cache = {}
 html_previews = {}
 
@@ -322,8 +317,6 @@ def parse_markdown_to_reportlab(text, style_profile=None):
     return elements
 
 def analyze_image(file):
-    """Analiza una imagen para extraer texto usando OCR con OpenAI Vision y determinar estilo."""
-    # Verificar suscripción para usar OCR
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute('SELECT plan FROM subscriptions WHERE user_id = ?', (current_user.id,))
@@ -438,11 +431,10 @@ def analyze_image(file):
         return style_profile, content
     
     except Exception as e:
-        print(f"Error en OCR de imagen: {e}")
+        logger.error(f"Error in image OCR: {e}")
         return style_profile, ""
 
 def analyze_document(file):
-    """Analiza un documento subido para extraer estilo, formato y tipografía."""
     style_profile = {
         'font_name': 'Helvetica',
         'font_size': 12,
@@ -605,7 +597,7 @@ def analyze_document(file):
             style_profile['confidence_scores']['tone'] = analysis.get('confidence', 0.7)
             style_profile['confidence_scores']['document_purpose'] = analysis.get('confidence', 0.7)
         except Exception as e:
-            print(f"Error en análisis de tono: {e}")
+            logger.error(f"Error in tone analysis: {e}")
     
     font_mapping = {
         'Times New Roman': 'Times-Roman',
@@ -617,7 +609,6 @@ def analyze_document(file):
     return style_profile, content
 
 def check_usage_limit():
-    """Verifica y actualiza el uso del usuario según su plan."""
     conn = get_db_connection()
     cursor = conn.cursor()
     cursor.execute('SELECT plan, usage_count, last_reset FROM subscriptions WHERE user_id = ?', (current_user.id,))
@@ -629,28 +620,28 @@ def check_usage_limit():
     
     plan, usage_count, last_reset = subscription['plan'], subscription['usage_count'], subscription['last_reset']
     last_reset_date = datetime.strptime(last_reset, '%Y-%m-%d %H:%M:%S')
-    current_date = datetime.now()
+    now = datetime.now()
     
-    # Reiniciar contador si ha pasado un mes
-    if (current_date - last_reset_date).days >= 30:
+    # Reset usage count monthly
+    if (now.year > last_reset_date.year) or (now.year == last_reset_date.year and now.month > last_reset_date.month):
         usage_count = 0
-        cursor.execute('UPDATE subscriptions SET usage_count = ?, last_reset = ? WHERE user_id = ?',
-                       (0, current_date.strftime('%Y-%m-%d %H:%M:%S'), current_user.id))
+        cursor.execute('UPDATE subscriptions SET usage_count = 0, last_reset = ? WHERE user_id = ?',
+                      (now.strftime('%Y-%m-%d %H:%M:%S'), current_user.id))
         conn.commit()
     
-    limits = {
-        'basic': 100,
-        'medium': 500,
-        'premium': float('inf')
+    # Define usage limits based on plan
+    usage_limits = {
+        'basic': 50,
+        'medium': 200,
+        'premium': 1000
     }
-    limit = limits.get(plan, 0)
     
+    limit = usage_limits.get(plan, 50)
     if usage_count >= limit:
         conn.close()
-        raise ValueError(f"Has alcanzado el límite de uso de tu plan ({plan}: {limit} documentos/mes).")
+        raise ValueError(f"Has alcanzado el límite de uso mensual para el plan {plan}. Actualiza tu suscripción o espera al próximo ciclo.")
     
-    cursor.execute('UPDATE subscriptions SET usage_count = ? WHERE user_id = ?',
-                   (usage_count + 1, current_user.id))
+    cursor.execute('UPDATE subscriptions SET usage_count = usage_count + 1 WHERE user_id = ?', (current_user.id,))
     conn.commit()
     conn.close()
     return True
@@ -666,8 +657,8 @@ def login():
         return redirect(url_for('index'))
     
     if request.method == 'POST':
-        email = request.form['email']
-        password = request.form['password']
+        email = request.form.get('email')
+        password = request.form.get('password')
         
         conn = get_db_connection()
         cursor = conn.cursor()
@@ -677,9 +668,10 @@ def login():
         
         if user and bcrypt.checkpw(password.encode('utf-8'), user['password'].encode('utf-8')):
             login_user(User(user['id'], user['email']))
+            flash('Inicio de sesión exitoso.', 'success')
             return redirect(url_for('index'))
         else:
-            flash('Correo o contraseña incorrectos', 'error')
+            flash('Correo o contraseña incorrectos.', 'error')
     
     return render_template('login.html')
 
@@ -689,21 +681,26 @@ def register():
         return redirect(url_for('index'))
     
     if request.method == 'POST':
-        email = request.form['email']
-        password = request.form['password']
+        email = request.form.get('email')
+        password = request.form.get('password')
         
         hashed_password = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
         
+        conn = get_db_connection()
+        cursor = conn.cursor()
         try:
-            conn = get_db_connection()
-            cursor = conn.cursor()
             cursor.execute('INSERT INTO users (email, password) VALUES (?, ?)', (email, hashed_password))
             conn.commit()
-            conn.close()
-            flash('Registro exitoso. Por favor, inicia sesión.', 'success')
-            return redirect(url_for('login'))
+            user_id = cursor.lastrowid
+            cursor.execute('INSERT INTO subscriptions (user_id, plan) VALUES (?, ?)', (user_id, 'basic'))
+            conn.commit()
+            login_user(User(user_id, email))
+            flash('Registro exitoso.', 'success')
+            return redirect(url_for('index'))
         except sqlite3.IntegrityError:
-            flash('El correo ya está registrado', 'error')
+            flash('El correo ya está registrado.', 'error')
+        finally:
+            conn.close()
     
     return render_template('register.html')
 
@@ -711,418 +708,332 @@ def register():
 @login_required
 def logout():
     logout_user()
+    flash('Sesión cerrada.', 'success')
     return redirect(url_for('login'))
 
-@app.route('/subscribe', methods=['GET'])
+@app.route('/subscribe')
 @login_required
-def subscribe_page():
+def subscribe():
     return render_template('subscribe.html', stripe_public_key=STRIPE_PUBLIC_KEY)
 
-@app.route('/create-subscription', methods=['POST'])
+@app.route('/create-checkout-session', methods=['POST'])
 @login_required
-def create_subscription():
+def create_checkout_session():
+    plan = request.json.get('plan')
+    price_ids = {
+        'medium': 'price_medium_plan_id',
+        'premium': 'price_premium_plan_id'
+    }
+    
+    if plan not in price_ids:
+        return jsonify({'error': 'Plan inválido'}), 400
+    
     try:
-        data = request.json
-        plan = data['plan']
-        
-        price_map = {
-            'basic': 'price_1RMPYvDKDJaukVa6VkwjKGPy',
-            'medium': 'price_1RMPZEDKDJaukVa6EjrpeQX7',
-            'premium': 'price_1RMPZODKDJaukVa6pDmChEZD'
-        }
-        price_id = price_map.get(plan)
-        if not price_id:
-            return jsonify({'error': 'Plan no válido'}), 400
-        
-        customer = stripe.Customer.create(
-            email=current_user.email
-        )
-        
-        checkout_session = stripe.checkout.Session.create(
+        session = stripe.checkout.Session.create(
             payment_method_types=['card'],
             line_items=[{
-                'price': price_id,
+                'price': price_ids[plan],
                 'quantity': 1,
             }],
             mode='subscription',
-            success_url='http://localhost:5000/subscription-success?session_id={CHECKOUT_SESSION_ID}',
-            cancel_url='http://localhost:5000/subscription-cancel',
-            customer=customer.id,
+            success_url='https://fgarola.site/success?session_id={CHECKOUT_SESSION_ID}',
+            cancel_url='https://fgarola.site/cancel',
+            metadata={'user_id': current_user.id}
         )
-        
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute('INSERT OR REPLACE INTO subscriptions (user_id, stripe_subscription_id, plan, usage_count, last_reset) VALUES (?, ?, ?, ?, ?)',
-                       (current_user.id, checkout_session.id, plan, 0, datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
-        conn.commit()
-        conn.close()
-        
-        return jsonify({'sessionId': checkout_session.id})
+        return jsonify({'id': session.id})
     except Exception as e:
+        logger.error(f"Error creating checkout session: {e}")
         return jsonify({'error': str(e)}), 400
 
-@app.route('/subscription-success')
+@app.route('/success')
 @login_required
-def subscription_success():
+def success():
     session_id = request.args.get('session_id')
-    if session_id:
+    try:
         session = stripe.checkout.Session.retrieve(session_id)
-        subscription_id = session.subscription
+        subscription = stripe.Subscription.retrieve(session.subscription)
         
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute('UPDATE subscriptions SET stripe_subscription_id = ? WHERE user_id = ?',
-                       (subscription_id, current_user.id))
+        cursor.execute('''
+            INSERT OR REPLACE INTO subscriptions (user_id, stripe_subscription_id, plan, usage_count, last_reset)
+            VALUES (?, ?, ?, 0, ?)
+        ''', (current_user.id, subscription.id, subscription.metadata.get('plan', 'medium'),
+              datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
         conn.commit()
         conn.close()
         
-        return "¡Suscripción exitosa! Ahora puedes usar el servicio según tu plan."
-    return "Error al procesar la suscripción.", 400
+        flash('Suscripción activada exitosamente.', 'success')
+    except Exception as e:
+        logger.error(f"Error processing subscription: {e}")
+        flash('Error al procesar la suscripción.', 'error')
+    
+    return redirect(url_for('index'))
 
-@app.route('/subscription-cancel')
+@app.route('/cancel')
 @login_required
-def subscription_cancel():
-    return "Suscripción cancelada. Puedes intentarlo de nuevo."
-
-@app.route('/check-usage', methods=['GET'])
-@login_required
-def check_usage():
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute('SELECT plan, usage_count, last_reset FROM subscriptions WHERE user_id = ?', (current_user.id,))
-    subscription = cursor.fetchone()
-    conn.close()
-    
-    if not subscription:
-        return jsonify({'error': 'No tienes una suscripción activa.'}), 403
-    
-    plan, usage_count, last_reset = subscription['plan'], subscription['usage_count'], subscription['last_reset']
-    last_reset_date = datetime.strptime(last_reset, '%Y-%m-%d %H:%M:%S')
-    current_date = datetime.now()
-    
-    if (current_date - last_reset_date).days >= 30:
-        usage_count = 0
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute('UPDATE subscriptions SET usage_count = ?, last_reset = ? WHERE user_id = ?',
-                       (0, current_date.strftime('%Y-%m-%d %H:%M:%S'), current_user.id))
-        conn.commit()
-        conn.close()
-    
-    limits = {
-        'basic': 100,
-        'medium': 500,
-        'premium': float('inf')
-    }
-    limit = limits.get(plan, 0)
-    return jsonify({'usage_count': usage_count, 'limit': limit, 'remaining': limit - usage_count})
+def cancel():
+    flash('Suscripción cancelada.', 'info')
+    return redirect(url_for('index'))
 
 @app.route('/generate', methods=['POST'])
 @login_required
-def generate_document():
+def generate():
     try:
-        check_usage_limit()  # Verificar y actualizar uso
+        check_usage_limit()
         
-        data = request.json
-        prompt = data.get('prompt', '')
+        data = request.get_json()
+        prompt = data.get('prompt')
         session_id = data.get('session_id', 'default')
         doc_type = data.get('doc_type', 'general')
         tone = data.get('tone', 'neutral')
         length = data.get('length', 'medium')
         language = data.get('language', 'es')
-        style_profile_id = data.get('style_profile_id', None)
+        style_profile_id = data.get('style_profile_id')
         message_history = data.get('message_history', [])
         model = data.get('model', 'gpt-3.5-turbo')
-
-        allowed_models = ['gpt-3.5-turbo', 'gpt-4o']
-        if model not in allowed_models:
-            return jsonify({'error': f'Modelo no válido. Usa uno de: {allowed_models}'}), 400
-
+        
         if not prompt:
-            return jsonify({'error': 'El prompt está vacío'}), 400
-
-        cache_key = f"{current_user.id}:{session_id}:{prompt}:{doc_type}:{tone}:{length}:{language}:{style_profile_id}:{model}"
+            return jsonify({'error': 'Prompt is required'}), 400
+        
+        cache_key = f"{prompt}:{doc_type}:{tone}:{length}:{language}:{style_profile_id}:{model}"
         if cache_key in response_cache:
             return jsonify({
-                'document': response_cache[cache_key]['document'],
-                'content_type': response_cache[cache_key]['content_type'],
-                'includes_css': response_cache[cache_key].get('includes_css', False)
+                'document': response_cache[cache_key],
+                'content_type': 'pdf' if doc_type != 'html' else 'html',
+                'session_id': session_id
             })
-
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute('SELECT id FROM sessions WHERE id = ? AND user_id = ?', (session_id, current_user.id))
-        if not cursor.fetchone():
-            cursor.execute('INSERT INTO sessions (id, user_id, name) VALUES (?, ?, ?)', 
-                          (session_id, current_user.id, f"Sesión {session_id}"))
-            conn.commit()
         
-        style_profile = get_style_profile(style_profile_id)
+        style_profile = get_default_style_profile()
+        if style_profile_id:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute('SELECT * FROM style_profiles WHERE id = ? AND user_id = ?', (style_profile_id, current_user.id))
+            profile = cursor.fetchone()
+            conn.close()
+            if profile:
+                style_profile = {
+                    'font_name': profile['font_name'],
+                    'font_size': profile['font_size'],
+                    'tone': profile['tone'],
+                    'margins': json.loads(profile['margins']),
+                    'structure': json.loads(profile['structure']),
+                    'text_color': profile['text_color'],
+                    'background_color': profile['background_color'],
+                    'alignment': profile['alignment'],
+                    'line_spacing': profile['line_spacing'],
+                    'document_purpose': profile['document_purpose'],
+                    'confidence_scores': json.loads(profile['confidence_scores'])
+                }
         
-        is_explanatory = re.search(r'^(¿Quién es|¿Qué es|explicar|detallar)\b', prompt, re.IGNORECASE) is not None
-        is_html = doc_type == 'html' or re.search(r'\b(html|página web|sitio web)\b', prompt, re.IGNORECASE) is not None
-        requests_css = re.search(r'\b(css|estilo|diseño|con estilo)\b', prompt, re.IGNORECASE) is not None
+        system_prompt = f"""
+        Eres un asistente experto en redacción de documentos. Genera un documento en {language} según las siguientes especificaciones:
+        - Tipo de documento: {doc_type}
+        - Tono: {tone}
+        - Longitud: {length}
+        - Estilo: fuente {style_profile['font_name']}, tamaño {style_profile['font_size']}, color de texto {style_profile['text_color']}, alineación {style_profile['alignment']}, espaciado de línea {style_profile['line_spacing']}.
+        - Estructura: {', '.join(style_profile['structure'])}
+        - Propósito: {style_profile['document_purpose']}
+        El documento debe estar en formato Markdown. Incluye tablas, listas o encabezados según corresponda.
+        """
         
-        if is_explanatory:
-            system_prompt = f"""
-            Eres GarBotGPT, un asistente que genera documentos profesionales en formato Markdown con una estructura clara para explicaciones.
-            - Tipo de documento: {doc_type} (e.g., explicación, biografía, informe).
-            - Tono: {tone} (formal, informal, técnico).
-            - Longitud: {length} (corto: ~100 palabras, medio: ~300 palabras, largo: ~600 palabras).
-            - Idioma: {language} (e.g., es para español, en para inglés, fr para francés).
-            - Usa la siguiente estructura en Markdown:
-              ```markdown
-              # [Tema o Nombre]
-              
-              ## Introducción
-              [Párrafo breve presentando el tema o persona.]
-              
-              ## Detalles Principales
-              - [Clave 1]: [Valor o descripción]
-              - [Clave 2]: [Valor o descripción]
-              - ...
-              
-              ## Contexto Adicional
-              [Párrafos detallando información relevante, como antecedentes, logros, o impacto.]
-              
-              ## Conclusión
-              [Resumen de la relevancia o importancia del tema.]
-              ```
-            - Usa encabezados (#, ##), listas (-), negritas (**), y tablas (|...|) cuando sea apropiado.
-            - Estilo: {style_profile}.
-            - Considera el contexto de los mensajes anteriores para mantener coherencia en la conversación.
-            """
-        elif is_html:
-            if requests_css:
-                system_prompt = f"""
-                Eres GarBotGPT, un asistente que genera páginas web completas en formato HTML con CSS embebido.
-                - Tipo de documento: página web (HTML con CSS).
-                - Tono: {tone} (formal, informal, técnico).
-                - Longitud: {length} (corto: ~100 líneas, medio: ~300 líneas, largo: ~600 líneas).
-                - Idioma: {language} (e.g., es para español, en para inglés, fr para francés).
-                - Genera un archivo HTML completo autocontenido con:
-                  - Estructura semántica completa (<header>, <nav>, <main>, <section>, <footer>, etc.).
-                  - Metaetiquetas esenciales (<meta charset="UTF-8">, viewport, title).
-                  - Estilos CSS embebidos dentro de una etiqueta <style> (NO uses enlaces a archivos CSS externos).
-                    - Diseño responsivo usando flexbox o grid.
-                    - Paleta de colores moderna y coherente.
-                    - Soporte para temas claro y oscuro usando variables CSS (--variable-name).
-                    - Transiciones y animaciones suaves para interactividad (e.g., hover effects).
-                    - Tipografía profesional (usar fuentes de Google Fonts si es necesario, e.g., 'Roboto', importadas via @import).
-                    - Sombras, bordes redondeados y otros efectos visuales modernos.
-                    - Accesibilidad (ARIA roles, contraste adecuado).
-                  - JavaScript opcional (en <script>) si el prompt lo requiere.
-                - Asegúrate de que el CSS esté bien organizado y comentado dentro de <style>.
-                - Estilo: {style_profile}.
-                - Considera el contexto de los mensajes anteriores para mantener coherencia.
-                """
-            else:
-                system_prompt = f"""
-                Eres GarBotGPT, un asistente que genera páginas web en formato HTML sin CSS.
-                - Tipo de documento: página web (solo HTML).
-                - Tono: {tone} (formal, informal, técnico).
-                - Longitud: {length} (corto: ~100 líneas, medio: ~300 líneas, largo: ~600 líneas).
-                - Idioma: {language} (e.g., es para español, en para inglés, fr para francés).
-                - Genera código HTML completo con:
-                  - Estructura semántica (<header>, <main>, <footer>, etc.).
-                  - Metaetiquetas esenciales (<meta charset="UTF-8">, viewport, title).
-                  - No incluyas CSS ni estilos inline a menos que se indique explícitamente.
-                  - JavaScript opcional (en <script>) si el prompt lo requiere.
-                - Asegúrate de que el HTML sea válido y semántico.
-                - Estilo: {style_profile}.
-                - Considera el contexto de los mensajes anteriores para mantener coherencia.
-                """
-        else:
-            system_prompt = f"""
-            Eres GarBotGPT, un asistente que genera documentos profesionales en formato Markdown.
-            - Tipo de documento: {doc_type} (e.g., carta formal, informe, correo, contrato, currículum).
-            - Tono: {tone} (formal, informal, técnico).
-            - Longitud: {length} (corto: ~100 palabras, medio: ~300 palabras, largo: ~600 palabras).
-            - Idioma: {language} (e.g., es para español, en para inglés, fr para francés).
-            - Usa encabezados (#, ##), listas (-), negritas (**), y tablas (|...|) cuando sea apropiado.
-            - Estilo: {style_profile}.
-            - Considera el contexto de los mensajes anteriores para mantener coherencia en la conversación.
-            """
+        messages = [
+            {"role": "system", "content": system_prompt},
+            *message_history,
+            {"role": "user", "content": prompt}
+        ]
         
-        messages = [{"role": "system", "content": system_prompt}]
-        messages.extend(message_history[-10:])
-        messages.append({"role": "user", "content": prompt})
-
         response = client.chat.completions.create(
             model=model,
             messages=messages,
-            max_tokens=1500,
-            temperature=0.7
+            max_tokens={'short': 500, 'medium': 1000, 'long': 2000}.get(length, 1000)
         )
-
-        document = response.choices[0].message.content
-        content_type = 'html' if is_html else 'pdf'
         
-        response_cache[cache_key] = {
-            'document': document,
-            'content_type': content_type,
-            'includes_css': requests_css if is_html else False
-        }
-
+        document = response.choices[0].message.content
+        
+        # Save message to database
+        conn = get_db_connection()
         cursor = conn.cursor()
+        cursor.execute('INSERT OR IGNORE INTO sessions (id, user_id, name) VALUES (?, ?, ?)',
+                      (session_id, current_user.id, f"Sesión {session_id}"))
         cursor.execute('INSERT INTO messages (session_id, content, is_user, content_type) VALUES (?, ?, ?, ?)',
-                      (session_id, prompt, True, content_type))
+                      (session_id, prompt, True, 'pdf' if doc_type != 'html' else 'html'))
         cursor.execute('INSERT INTO messages (session_id, content, is_user, content_type) VALUES (?, ?, ?, ?)',
-                      (session_id, document, False, content_type))
+                      (session_id, document, False, 'pdf' if doc_type != 'html' else 'html'))
         conn.commit()
         conn.close()
-
-        socketio.emit('newMessage', {
-            'sessionId': session_id,
-            'content': prompt,
-            'isUser': True,
-            'contentType': content_type
-        }, room=session_id)
-        socketio.emit('newMessage', {
-            'sessionId': session_id,
-            'content': document,
-            'isUser': False,
-            'contentType': content_type
-        }, room=session_id)
-
+        
+        response_cache[cache_key] = document
+        
         return jsonify({
             'document': document,
-            'content_type': content_type,
-            'includes_css': requests_css if is_html else False
+            'content_type': 'pdf' if doc_type != 'html' else 'html',
+            'session_id': session_id
         })
+    
     except ValueError as ve:
         return jsonify({'error': str(ve)}), 403
-    except openai.AuthenticationError:
-        return jsonify({'error': 'Error de autenticación con OpenAI. Verifica la clave API.'}), 401
-    except openai.RateLimitError:
-        return jsonify({'error': 'Límite de solicitudes alcanzado. Intenta de nuevo más tarde.'}), 429
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-def get_style_profile(profile_id):
-    if not profile_id:
-        return get_default_style_profile()
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute('SELECT * FROM style_profiles WHERE id = ? AND user_id = ?', (profile_id, current_user.id))
-    profile = cursor.fetchone()
-    conn.close()
-    if profile:
-        return {
-            'font_name': profile['font_name'],
-            'font_size': profile['font_size'],
-            'tone': profile['tone'],
-            'margins': json.loads(profile['margins']),
-            'structure': json.loads(profile['structure']),
-            'text_color': profile['text_color'],
-            'background_color': profile['background_color'],
-            'alignment': profile['alignment'],
-            'line_spacing': profile['line_spacing'],
-            'document_purpose': profile['document_purpose'],
-            'confidence_scores': json.loads(profile['confidence_scores'])
-        }
-    return get_default_style_profile()
+        logger.error(f"Error in generate: {e}")
+        return jsonify({'error': 'Error interno del servidor'}), 500
 
 @app.route('/generate_preview', methods=['POST'])
 @login_required
 def generate_preview():
     try:
-        check_usage_limit()  # Verificar y actualizar uso
+        check_usage_limit()
         
-        data = request.json
-        content = data.get('content', '')
+        data = request.get_json()
+        content = data.get('content')
         content_type = data.get('content_type', 'pdf')
-        style_profile_id = data.get('style_profile_id', None)
-        includes_css = data.get('includes_css', False)
-        if not content:
-            return jsonify({'error': 'El contenido está vacío'}), 400
-
+        style_profile_id = data.get('style_profile_id')
+        
+        style_profile = get_default_style_profile()
+        if style_profile_id:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute('SELECT * FROM style_profiles WHERE id = ? AND user_id = ?', (style_profile_id, current_user.id))
+            profile = cursor.fetchone()
+            conn.close()
+            if profile:
+                style_profile = {
+                    'font_name': profile['font_name'],
+                    'font_size': profile['font_size'],
+                    'tone': profile['tone'],
+                    'margins': json.loads(profile['margins']),
+                    'structure': json.loads(profile['structure']),
+                    'text_color': profile['text_color'],
+                    'background_color': profile['background_color'],
+                    'alignment': profile['alignment'],
+                    'line_spacing': profile['line_spacing'],
+                    'document_purpose': profile['document_purpose'],
+                    'confidence_scores': json.loads(profile['confidence_scores'])
+                }
+        
         if content_type == 'html':
-            preview_id = f"{current_user.id}:{uuid.uuid4()}"
+            preview_id = str(uuid.uuid4())
             html_previews[preview_id] = content
-            if len(html_previews) > 100:
-                oldest_key = next(iter(html_previews))
-                del html_previews[oldest_key]
-            return jsonify({
-                'preview_id': preview_id,
-                'content_type': 'html',
-                'includes_css': includes_css
-            })
-        
-        buffer = BytesIO()
-        doc = SimpleDocTemplate(
-            buffer, 
-            pagesize=letter, 
-            rightMargin=0.75*inch, 
-            leftMargin=0.75*inch, 
-            topMargin=inch, 
-            bottomMargin=0.75*inch
-        )
-        
-        styles = getSampleStyleSheet()
-        title_style = ParagraphStyle(name='Title', fontSize=18, leading=22, spaceAfter=12, fontName='Helvetica-Bold')
-        subtitle_style = ParagraphStyle(name='Subtitle', fontSize=10, leading=14, spaceAfter=10, fontName='Helvetica-Oblique')
-
-        story = []
-        story.append(Paragraph("Documento Generado por GarBotGPT", title_style))
-        story.append(Paragraph(f"Fecha: {datetime.now().strftime('%d/%m/%Y %H:%M')}", subtitle_style))
-        story.append(Spacer(1, 0.3 * inch))
-        
-        style_profile = get_style_profile(style_profile_id)
-        story.extend(parse_markdown_to_reportlab(content, style_profile))
-        
-        doc.build(story)
-        buffer.seek(0)
-        return send_file(
-            buffer,
-            as_attachment=True,
-            download_name='documento_generado.pdf',
-            mimetype='application/pdf'
-        )
+            return jsonify({'preview_id': preview_id})
+        else:
+            buffer = BytesIO()
+            doc = SimpleDocTemplate(
+                buffer,
+                pagesize=letter,
+                topMargin=style_profile['margins']['top'] * inch,
+                bottomMargin=style_profile['margins']['bottom'] * inch,
+                leftMargin=style_profile['margins']['left'] * inch,
+                rightMargin=style_profile['margins']['right'] * inch
+            )
+            elements = parse_markdown_to_reportlab(content, style_profile)
+            doc.build(elements)
+            buffer.seek(0)
+            return send_file(buffer, mimetype='application/pdf')
+    
     except ValueError as ve:
         return jsonify({'error': str(ve)}), 403
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        logger.error(f"Error in generate_preview: {e}")
+        return jsonify({'error': 'Error interno del servidor'}), 500
 
-@app.route('/preview_html/<preview_id>', methods=['GET'])
+@app.route('/preview_html/<preview_id>')
 @login_required
 def preview_html(preview_id):
-    if preview_id in html_previews and preview_id.startswith(f"{current_user.id}:"):
-        html_content = html_previews[preview_id]
-        if not html_content.strip().startswith('<!DOCTYPE html>'):
-            html_content = f"""<!DOCTYPE html>
-<html>
-<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
-<body>{html_content}</body>
-</html>"""
-        return Response(html_content, mimetype='text/html')
+    if preview_id in html_previews:
+        return Response(html_previews[preview_id], mimetype='text/html')
     return jsonify({'error': 'Vista previa no encontrada'}), 404
+
+@app.route('/style_profiles', methods=['GET'])
+@login_required
+def get_style_profiles():
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('SELECT * FROM style_profiles WHERE user_id = ?', (current_user.id,))
+        profiles = cursor.fetchall()
+        conn.close()
+        
+        profiles_dict = {
+            str(profile['id']): {
+                'font_name': profile['font_name'],
+                'font_size': profile['font_size'],
+                'tone': profile['tone'],
+                'margins': json.loads(profile['margins']),
+                'structure': json.loads(profile['structure']),
+                'text_color': profile['text_color'],
+                'background_color': profile['background_color'],
+                'alignment': profile['alignment'],
+                'line_spacing': profile['line_spacing'],
+                'document_purpose': profile['document_purpose'],
+                'confidence_scores': json.loads(profile['confidence_scores'])
+            } for profile in profiles
+        }
+        
+        return jsonify(profiles_dict)
+    
+    except Exception as e:
+        logger.error(f"Error in get_style_profiles: {e}")
+        return jsonify({'error': 'Error interno del servidor'}), 500
+
+@app.route('/style_profiles/<profile_id>', methods=['DELETE'])
+@login_required
+def delete_style_profile(profile_id):
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('DELETE FROM style_profiles WHERE id = ? AND user_id = ?', (profile_id, current_user.id))
+        if cursor.rowcount == 0:
+            conn.close()
+            return jsonify({'error': 'Perfil no encontrado o no autorizado'}), 404
+        conn.commit()
+        conn.close()
+        return jsonify({'message': 'Perfil eliminado correctamente'})
+    
+    except Exception as e:
+        logger.error(f"Error in delete_style_profile: {e}")
+        return jsonify({'error': 'Error interno del servidor'}), 500
+
+@app.route('/purge_style_profiles', methods=['DELETE'])
+@login_required
+def purge_style_profiles():
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute('DELETE FROM style_profiles WHERE user_id = ?', (current_user.id,))
+        conn.commit()
+        conn.close()
+        return jsonify({'message': 'Todos los perfiles de estilo han sido eliminados'})
+    
+    except Exception as e:
+        logger.error(f"Error in purge_style_profiles: {e}")
+        return jsonify({'error': 'Error interno del servidor'}), 500
 
 @app.route('/analyze_document', methods=['POST'])
 @login_required
-def analyze_document_endpoint():
+def analyze_document_route():
     try:
-        check_usage_limit()  # Verificar y actualizar uso
+        check_usage_limit()
         
         if 'file' not in request.files:
             return jsonify({'error': 'No se proporcionó ningún archivo'}), 400
         
         file = request.files['file']
-        if not (file.filename.endswith('.pdf') or file.filename.endswith('.txt') or 
-                file.filename.endswith('.jpg') or file.filename.endswith('.jpeg') or file.filename.endswith('.png')):
-            return jsonify({'error': 'Formato no soportado. Usa PDF, TXT o imagen (JPG, JPEG, PNG).'}), 400
+        if not file or not file.filename:
+            return jsonify({'error': 'Archivo inválido'}), 400
         
-        if file.filename.endswith(('.jpg', '.jpeg', '.png')):
+        if file.filename.endswith(('.pdf', '.txt')):
+            style_profile, content = analyze_document(file)
+        elif file.filename.endswith(('.jpg', '.jpeg', '.png')):
             style_profile, content = analyze_image(file)
         else:
-            style_profile, content = analyze_document(file)
+            return jsonify({'error': 'Formato de archivo no soportado'}), 400
         
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute('''
             INSERT INTO style_profiles (
-                user_id, font_name, font_size, tone, margins, structure, 
-                text_color, background_color, alignment, line_spacing, document_purpose, confidence_scores
+                user_id, font_name, font_size, tone, margins, structure,
+                text_color, background_color, alignment, line_spacing,
+                document_purpose, confidence_scores
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             current_user.id,
@@ -1138,132 +1049,39 @@ def analyze_document_endpoint():
             style_profile['document_purpose'],
             json.dumps(style_profile['confidence_scores'])
         ))
-        profile_id = cursor.lastrowid
         conn.commit()
         conn.close()
         
-        return jsonify({
-            'style_profile_id': str(profile_id),
-            'style_profile': style_profile,
-            'content_summary': content[:500]
-        })
+        return jsonify({'message': 'Perfil de estilo creado correctamente', 'content': content})
+    
     except ValueError as ve:
         return jsonify({'error': str(ve)}), 403
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/style_profiles', methods=['GET'])
-@login_required
-def get_style_profiles():
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute('SELECT * FROM style_profiles WHERE user_id = ?', (current_user.id,))
-    profiles = cursor.fetchall()
-    conn.close()
-    
-    result = {}
-    for profile in profiles:
-        result[str(profile['id'])] = {
-            'font_name': profile['font_name'],
-            'font_size': profile['font_size'],
-            'tone': profile['tone'],
-            'margins': json.loads(profile['margins']),
-            'structure': json.loads(profile['structure']),
-            'text_color': profile['text_color'],
-            'background_color': profile['background_color'],
-            'alignment': profile['alignment'],
-            'line_spacing': profile['line_spacing'],
-            'document_purpose': profile['document_purpose'],
-            'confidence_scores': json.loads(profile['confidence_scores'])
-        }
-    
-    return jsonify(result)
-
-@app.route('/style_profiles/<profile_id>', methods=['DELETE'])
-@login_required
-def delete_style_profile(profile_id):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute('DELETE FROM style_profiles WHERE id = ? AND user_id = ?', (profile_id, current_user.id))
-    conn.commit()
-    conn.close()
-    
-    if cursor.rowcount > 0:
-        return jsonify({'message': 'Perfil de estilo eliminado'})
-    return jsonify({'error': 'Perfil no encontrado'}), 404
-
-@app.route('/purge_style_profiles', methods=['DELETE'])
-@login_required
-def purge_style_profiles():
-    try:
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute('DELETE FROM style_profiles WHERE user_id = ?', (current_user.id,))
-        conn.commit()
-        conn.close()
-        return jsonify({'message': 'Todos los perfiles de estilo han sido eliminados'})
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        logger.error(f"Error in analyze_document: {e}")
+        return jsonify({'error': 'Error interno del servidor'}), 500
 
 @socketio.on('joinSession')
 def on_join(data):
-    session_id = data['sessionId']
+    session_id = data.get('sessionId')
     join_room(session_id)
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute('SELECT content, is_user, content_type FROM messages WHERE session_id = ?', (session_id,))
-    messages = cursor.fetchall()
-    conn.close()
-    for msg in messages:
-        emit('newMessage', {
-            'sessionId': session_id,
-            'content': msg['content'],
-            'isUser': msg['is_user'],
-            'contentType': msg['content_type']
-        }, room=session_id)
+    emit('joinSession', {'message': f'Usuario unido a la sesión {session_id}'}, room=session_id)
 
 @socketio.on('newMessage')
 def on_new_message(data):
-    session_id = data['sessionId']
-    content = data['content']
-    is_user = data['isUser']
-    content_type = data['contentType']
-    
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute('INSERT INTO messages (session_id, content, is_user, content_type) VALUES (?, ?, ?, ?)',
-                  (session_id, content, is_user, content_type))
-    conn.commit()
-    conn.close()
-    
-    emit('newMessage', data, room=session_id, broadcast=True)
+    session_id = data.get('sessionId')
+    emit('newMessage', data, room=session_id)
 
 @socketio.on('editMessage')
 def on_edit_message(data):
-    session_id = data['sessionId']
-    old_content = data['oldContent']
-    new_content = data['newContent']
-    
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute('UPDATE messages SET content = ? WHERE session_id = ? AND content = ? AND is_user = 1',
-                  (new_content, session_id, old_content))
-    conn.commit()
-    conn.close()
-    
-    emit('editMessage', data, room=session_id, broadcast=True)
+    session_id = data.get('sessionId')
+    emit('editMessage', data, room=session_id)
 
 @socketio.on('clearChat')
 def on_clear_chat(data):
-    session_id = data['sessionId']
-    
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute('DELETE FROM messages WHERE session_id = ?', (session_id,))
-    conn.commit()
-    conn.close()
-    
-    emit('clearChat', data, room=session_id, broadcast=True)
+    session_id = data.get('sessionId')
+    emit('clearChat', data, room=session_id)
 
 if __name__ == '__main__':
-    socketio.run(app, host='0.0.0.0', port=int(os.environ.get('PORT', 5000)))
+    # For production, use gunicorn with eventlet or gevent
+    # Example: gunicorn -k gevent --bind 0.0.0.0:5000 app:app
+    socketio.run(app, host='0.0.0.0', port=5000, debug=False, ssl_context=('cert.pem', 'key.pem'))
