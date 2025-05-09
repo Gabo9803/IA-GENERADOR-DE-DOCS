@@ -20,6 +20,7 @@
             --toast-text: #ffffff;
             --sidebar-bg: rgba(249, 250, 251, 0.15);
             --sidebar-text: #111827;
+            --error-bg: rgba(239, 68, 68, 0.8);
         }
 
         [data-theme="dark"] {
@@ -36,6 +37,7 @@
             --toast-text: #111827;
             --sidebar-bg: rgba(31, 41, 55, 0.15);
             --sidebar-text: #e5e7eb;
+            --error-bg: rgba(248, 113, 113, 0.8);
         }
 
         * {
@@ -171,7 +173,7 @@
             background: var(--ai-bg);
         }
 
-        .purge-styles, .purge-documents {
+        .purge-styles, .purge-documents, .retry-button {
             padding: 10px;
             background: var(--accent-color);
             color: white;
@@ -185,13 +187,17 @@
             -webkit-backdrop-filter: blur(5px);
         }
 
-        .purge-styles:hover, .purge-documents:hover {
+        .retry-button {
+            background: var(--error-bg);
+        }
+
+        .purge-styles:hover, .purge-documents:hover, .retry-button:hover {
             background: #2563eb;
             transform: translateY(-2px);
             box-shadow: 0 8px 20px rgba(0, 0, 0, 0.3);
         }
 
-        .purge-styles:active, .purge-documents:active {
+        .purge-styles:active, .purge-documents:active, .retry-button:active {
             transform: translateY(0);
             box-shadow: var(--shadow);
         }
@@ -669,13 +675,13 @@
         <div class="sidebar" id="sidebar">
             <div class="sidebar-header">
                 <h2>Opciones</h2>
-                <button class="sidebar-toggle" onclick="toggleSidebar()">✕</button>
+                <button class="sidebar-toggle" aria-label="Cerrar barra lateral" onclick="toggleSidebar()">✕</button>
             </div>
-            <input type="text" id="searchInput" placeholder="Buscar en historial..." oninput="searchSessions()">
+            <input type="text" id="searchInput" placeholder="Buscar en historial..." aria-label="Buscar sesiones">
             <h3>Sesiones</h3>
             <div class="session-list" id="sessionList"></div>
             <h3>Configuración de Documento</h3>
-            <select id="docType">
+            <select id="docType" aria-label="Tipo de documento">
                 <option value="general">General</option>
                 <option value="formal_letter">Carta Formal</option>
                 <option value="report">Informe</option>
@@ -684,24 +690,24 @@
                 <option value="resume">Currículum</option>
                 <option value="html">Página Web (HTML)</option>
             </select>
-            <select id="tone">
+            <select id="tone" aria-label="Tono del documento">
                 <option value="neutral">Neutral</option>
                 <option value="formal">Formal</option>
                 <option value="informal">Informal</option>
                 <option value="technical">Técnico</option>
             </select>
-            <select id="length">
+            <select id="length" aria-label="Longitud del documento">
                 <option value="short">Corto</option>
                 <option value="medium">Medio</option>
                 <option value="long">Largo</option>
             </select>
-            <select id="language">
+            <select id="language" aria-label="Idioma del documento">
                 <option value="es">Español</option>
                 <option value="en">Inglés</option>
                 <option value="fr">Francés</option>
             </select>
             <h3>Perfiles de Estilo</h3>
-            <select id="styleProfile">
+            <select id="styleProfile" aria-label="Seleccionar perfil de estilo">
                 <option value="">Ninguno</option>
             </select>
             <div class="style-list" id="styleList"></div>
@@ -709,7 +715,7 @@
             <h3>Subir Documento</h3>
             <div class="upload-area" id="uploadArea">
                 Arrastra o haz clic para subir un PDF/TXT
-                <input type="file" id="fileInput" accept=".pdf,.txt" style="display: none;">
+                <input type="file" id="fileInput" accept=".pdf,.txt" style="display: none;" aria-label="Subir documento">
             </div>
             <h3>Documentos Analizados</h3>
             <div class="document-list" id="documentList"></div>
@@ -717,14 +723,14 @@
         </div>
         <div class="main">
             <div class="header">
-                <button class="sidebar-toggle" onclick="toggleSidebar()">☰</button>
+                <button class="sidebar-toggle" aria-label="Abrir barra lateral" onclick="toggleSidebar()">☰</button>
                 <h1>GarBotGPT</h1>
                 <div class="header-buttons">
-                    <button class="new-session" onclick="newSession()"><span class="tooltip">Nueva sesión</span>📝</button>
-                    <button class="export-chat" onclick="exportChat()"><span class="tooltip">Exportar chat</span>📤</button>
-                    <button class="clear-chat" onclick="clearChat()"><span class="tooltip">Limpiar chat</span>🗑️</button>
-                    <button class="theme-toggle" onclick="toggleTheme()"><span class="tooltip">Cambiar tema</span>☀️</button>
-                    <a href="/logout" class="logout-button"><span class="tooltip">Cerrar sesión</span>🚪</a>
+                    <button class="new-session" aria-label="Nueva sesión" onclick="newSession()"><span class="tooltip">Nueva sesión</span>📝</button>
+                    <button class="export-chat" aria-label="Exportar chat" onclick="exportChat()"><span class="tooltip">Exportar chat</span>📤</button>
+                    <button class="clear-chat" aria-label="Limpiar chat" onclick="clearChat()"><span class="tooltip">Limpiar chat</span>🗑️</button>
+                    <button class="theme-toggle" aria-label="Cambiar tema" onclick="toggleTheme()"><span class="tooltip">Cambiar tema</span>☀️</button>
+                    <a href="/logout" class="logout-button" aria-label="Cerrar sesión"><span class="tooltip">Cerrar sesión</span>🚪</a>
                 </div>
             </div>
             <div class="chat-area" id="chatArea"></div>
@@ -732,26 +738,26 @@
                 <div class="progress-bar" id="progressBar"></div>
                 <div class="suggestions" id="suggestions"></div>
                 <div class="input-group">
-                    <textarea id="prompt" placeholder="Describe el documento que deseas generar..."></textarea>
-                    <button class="send" onclick="sendMessage()">Enviar</button>
+                    <textarea id="prompt" placeholder="Describe el documento que deseas generar..." aria-label="Ingresar prompt"></textarea>
+                    <button class="send" onclick="sendMessage()" aria-label="Enviar mensaje">Enviar</button>
                 </div>
             </div>
         </div>
     </div>
     <div class="modal" id="previewModal">
         <div class="modal-content">
-            <button class="modal-close" onclick="closeModal()">✕</button>
+            <button class="modal-close" onclick="closeModal()" aria-label="Cerrar vista previa">✕</button>
             <h2>Vista Previa</h2>
             <div id="previewContent"></div>
-            <button class="send" onclick="downloadCurrentContent()">Descargar</button>
+            <button class="send" onclick="downloadCurrentContent()" aria-label="Descargar documento">Descargar</button>
         </div>
     </div>
     <div class="modal" id="renameModal">
         <div class="modal-content rename-modal">
-            <button class="modal-close" onclick="closeRenameModal()">✕</button>
+            <button class="modal-close" onclick="closeRenameModal()" aria-label="Cerrar renombrar sesión">✕</button>
             <h2>Renombrar Sesión</h2>
-            <input type="text" id="renameInput" placeholder="Nuevo nombre de la sesión">
-            <button onclick="saveSessionName()">Guardar</button>
+            <input type="text" id="renameInput" placeholder="Nuevo nombre de la sesión" aria-label="Nuevo nombre de la sesión">
+            <button onclick="saveSessionName()" aria-label="Guardar nombre de sesión">Guardar</button>
         </div>
     </div>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
@@ -778,7 +784,7 @@
         const suggestionsContainer = document.getElementById('suggestions');
         let currentContentBlob = null;
         let currentContentType = 'pdf';
-        let currentSessionId = null;
+        let currentSessionId = localStorage.getItem('currentSessionId') || null;
         let offlineQueue = [];
         let renameSessionId = null;
 
@@ -798,6 +804,18 @@
             setTimeout(() => toast.remove(), 5000);
         }
 
+        function debounce(func, wait) {
+            let timeout;
+            return function executedFunction(...args) {
+                const later = () => {
+                    clearTimeout(timeout);
+                    func(...args);
+                };
+                clearTimeout(timeout);
+                timeout = setTimeout(later, wait);
+            };
+        }
+
         async function loadSessions() {
             try {
                 const response = await fetch('/sessions');
@@ -811,8 +829,8 @@
                     item.innerHTML = `
                         ${session.name}
                         <div>
-                            <button onclick="renameSession('${id}')">✏️</button>
-                            <button onclick="deleteSession('${id}')">🗑️</button>
+                            <button aria-label="Renombrar sesión" onclick="renameSession('${id}')">✏️</button>
+                            <button aria-label="Eliminar sesión" onclick="deleteSession('${id}')">🗑️</button>
                         </div>
                     `;
                     item.onclick = (e) => {
@@ -820,7 +838,9 @@
                     };
                     sessionList.appendChild(item);
                 });
-                if (!currentSessionId && Object.keys(sessions).length > 0) {
+                if (currentSessionId) {
+                    loadSession(currentSessionId);
+                } else if (Object.keys(sessions).length > 0) {
                     const latestSessionId = Object.keys(sessions).sort((a, b) => 
                         new Date(sessions[b].created_at) - new Date(sessions[a].created_at))[0];
                     loadSession(latestSessionId);
@@ -836,6 +856,7 @@
                 if (!response.ok) throw new Error(`Error ${response.status}: ${await response.text()}`);
                 const session = await response.json();
                 currentSessionId = sessionId;
+                localStorage.setItem('currentSessionId', sessionId);
                 chatArea.innerHTML = '';
                 session.messages.forEach((msg, index) => {
                     addMessage(msg.content, msg.role === 'user' ? 'user' : 'ai', msg.content_type, index);
@@ -856,6 +877,7 @@
                 if (!response.ok) throw new Error(`Error ${response.status}: ${await response.text()}`);
                 const session = await response.json();
                 currentSessionId = session.id;
+                localStorage.setItem('currentSessionId', session.id);
                 chatArea.innerHTML = '';
                 await loadSessions();
                 showToast('Nueva sesión creada');
@@ -905,6 +927,7 @@
                 if (!response.ok) throw new Error(`Error ${response.status}: ${await response.text()}`);
                 if (currentSessionId === sessionId) {
                     currentSessionId = null;
+                    localStorage.removeItem('currentSessionId');
                     chatArea.innerHTML = '';
                 }
                 await loadSessions();
@@ -946,7 +969,7 @@
                     item.className = 'style-item';
                     item.innerHTML = `
                         ${profile.font_name} (${profile.tone}, ${profile.structure.join(', ')})
-                        <button onclick="deleteStyleProfile('${id}')">🗑️</button>
+                        <button aria-label="Eliminar perfil de estilo" onclick="deleteStyleProfile('${id}')">🗑️</button>
                     `;
                     item.onclick = (e) => {
                         if (e.target.tagName !== 'BUTTON') {
@@ -960,6 +983,10 @@
                     styleSelect.appendChild(option);
                 });
             } catch (error) {
+                styleList.innerHTML = `
+                    <p>Error al cargar perfiles: ${error.message}</p>
+                    <button class="retry-button" onclick="loadStyleProfiles()">Reintentar</button>
+                `;
                 showToast(`Error al cargar perfiles: ${error.message}`, 'error');
             }
         }
@@ -1004,7 +1031,7 @@
                     item.className = 'document-item';
                     item.innerHTML = `
                         ${doc.filename}
-                        <button onclick="deleteAnalyzedDocument('${id}')">🗑️</button>
+                        <button aria-label="Eliminar documento analizado" onclick="deleteAnalyzedDocument('${id}')">🗑️</button>
                     `;
                     documentList.appendChild(item);
                 });
@@ -1070,7 +1097,7 @@
                     .filter(el => el.classList.contains('message'))
                     .map(el => ({
                         role: el.classList.contains('user-message') ? 'user' : 'assistant',
-                        content: el.querySelector('.ai-message-content')?.innerText || el.querySelector('.message-content')?.innerText || el.innerText,
+                        content: el.dataset.rawContent || el.querySelector('.message-content').innerText,
                         content_type: el.dataset.contentType || 'general'
                     }));
 
@@ -1115,40 +1142,42 @@
             message.className = `message ${type === 'user' ? 'user-message' : 'ai-message'}`;
             message.dataset.contentType = contentType;
             message.dataset.index = index !== null ? index : chatArea.children.length;
-            if (type === 'ai') {
-                message.innerHTML = `
-                    <div class="message-content ai-message-content">${marked.parse(content)}</div>
-                    <div class="message-buttons">
-                        <button class="copy-button" onclick="copyMessage(this)">📋</button>
-                        <button class="preview-button" onclick="previewMessage(this, '${contentType}')">📄</button>
-                        <button class="edit-button" onclick="editMessage(this)">✏️</button>
-                    </div>
-                    <textarea class="edit-area"></textarea>
-                    <div class="edit-buttons" style="display: none;">
-                        <button class="save-edit" onclick="saveEdit(this)">Guardar</button>
-                        <button class="cancel-edit" onclick="cancelEdit(this)">Cancelar</button>
-                    </div>
-                `;
-            } else {
-                message.innerHTML = `
-                    <div class="message-content">${content}</div>
-                    <div class="message-buttons">
-                        <button class="copy-button" onclick="copyMessage(this)">📋</button>
-                        <button class="edit-button" onclick="editMessage(this)">✏️</button>
-                    </div>
-                    <textarea class="edit-area"></textarea>
-                    <div class="edit-buttons" style="display: none;">
-                        <button class="save-edit" onclick="saveEdit(this)">Guardar</button>
-                        <button class="cancel-edit" onclick="cancelEdit(this)">Cancelar</button>
-                    </div>
-                `;
-            }
+            message.dataset.rawContent = content;
+
+            const contentDiv = document.createElement('div');
+            contentDiv.className = 'message-content';
+            contentDiv.classList.add(type === 'ai' ? 'ai-message-content' : '');
+            contentDiv.innerHTML = type === 'ai' ? marked.parse(content) : content;
+
+            const buttonsDiv = document.createElement('div');
+            buttonsDiv.className = 'message-buttons';
+            buttonsDiv.innerHTML = `
+                <button class="copy-button" aria-label="Copiar mensaje" onclick="copyMessage(this)">📋</button>
+                ${type === 'ai' ? `<button class="preview-button" aria-label="Vista previa del mensaje" onclick="previewMessage(this, '${contentType}')">📄</button>` : ''}
+                <button class="edit-button" aria-label="Editar mensaje" onclick="editMessage(this)">✏️</button>
+            `;
+
+            const editArea = document.createElement('textarea');
+            editArea.className = 'edit-area';
+
+            const editButtons = document.createElement('div');
+            editButtons.className = 'edit-buttons';
+            editButtons.style.display = 'none';
+            editButtons.innerHTML = `
+                <button class="save-edit" onclick="saveEdit(this)">Guardar</button>
+                <button class="cancel-edit" onclick="cancelEdit(this)">Cancelar</button>
+            `;
+
+            message.appendChild(contentDiv);
+            message.appendChild(buttonsDiv);
+            message.appendChild(editArea);
+            message.appendChild(editButtons);
             chatArea.appendChild(message);
             chatArea.scrollTop = chatArea.scrollHeight;
         }
 
         async function copyMessage(button) {
-            const content = button.parentElement.previousElementSibling.innerText;
+            const content = button.parentElement.parentElement.dataset.rawContent;
             try {
                 await navigator.clipboard.writeText(content);
                 showToast('Mensaje copiado al portapapeles');
@@ -1158,7 +1187,7 @@
         }
 
         async function previewMessage(button, contentType) {
-            const content = button.parentElement.previousElementSibling.innerText;
+            const content = button.parentElement.parentElement.dataset.rawContent;
             try {
                 const response = await fetch('/generate_preview', {
                     method: 'POST',
@@ -1169,9 +1198,9 @@
                         style_profile_id: document.getElementById('styleProfile').value
                     })
                 });
-                
+
                 if (!response.ok) throw new Error(`Error ${response.status}: ${await response.text()}`);
-                
+
                 const previewContent = document.getElementById('previewContent');
                 if (contentType === 'html') {
                     const data = await response.json();
@@ -1197,7 +1226,7 @@
             const editArea = message.querySelector('.edit-area');
             const editButtons = message.querySelector('.edit-buttons');
             contentDiv.style.display = 'none';
-            editArea.value = contentDiv.innerText;
+            editArea.value = message.dataset.rawContent;
             editArea.classList.add('active');
             editButtons.style.display = 'flex';
             message.querySelector('.message-buttons').style.opacity = '0';
@@ -1219,10 +1248,8 @@
                     body: JSON.stringify({ content: newContent })
                 });
                 if (!response.ok) throw new Error(`Error ${response.status}: ${await response.text()}`);
-                contentDiv.innerText = newContent;
-                if (message.classList.contains('ai-message')) {
-                    contentDiv.innerHTML = marked.parse(newContent);
-                }
+                message.dataset.rawContent = newContent;
+                contentDiv.innerHTML = message.classList.contains('ai-message') ? marked.parse(newContent) : newContent;
                 contentDiv.style.display = 'block';
                 editArea.classList.remove('active');
                 button.parentElement.style.display = 'none';
@@ -1275,14 +1302,14 @@
             sidebar.classList.toggle('hidden');
         }
 
-        function searchSessions() {
+        const searchSessions = debounce(() => {
             const query = searchInput.value.toLowerCase();
             const sessionItems = sessionList.children;
             Array.from(sessionItems).forEach(item => {
                 const name = item.textContent.toLowerCase();
                 item.style.display = name.includes(query) ? '' : 'none';
             });
-        }
+        }, 300);
 
         function exportChat() {
             if (!currentSessionId) {
@@ -1293,7 +1320,7 @@
                 .filter(el => el.classList.contains('message'))
                 .map(el => {
                     const role = el.classList.contains('user-message') ? 'Usuario' : 'GarBotGPT';
-                    const content = el.querySelector('.message-content')?.innerText || el.innerText;
+                    const content = el.dataset.rawContent || el.querySelector('.message-content').innerText;
                     return `${role}: ${content}`;
                 }).join('\n\n');
             const blob = new Blob([messages], { type: 'text/plain' });
@@ -1389,6 +1416,8 @@
                 sendMessage();
             }
         });
+
+        searchInput.addEventListener('input', searchSessions);
 
         document.addEventListener('DOMContentLoaded', () => {
             const savedTheme = localStorage.getItem('theme') || 'light';
