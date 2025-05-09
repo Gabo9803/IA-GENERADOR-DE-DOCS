@@ -20,7 +20,6 @@
             --toast-text: #ffffff;
             --sidebar-bg: rgba(249, 250, 251, 0.15);
             --sidebar-text: #111827;
-            --error-bg: rgba(239, 68, 68, 0.8);
         }
 
         [data-theme="dark"] {
@@ -37,7 +36,6 @@
             --toast-text: #111827;
             --sidebar-bg: rgba(31, 41, 55, 0.15);
             --sidebar-text: #e5e7eb;
-            --error-bg: rgba(248, 113, 113, 0.8);
         }
 
         * {
@@ -128,12 +126,12 @@
             -webkit-backdrop-filter: blur(5px);
         }
 
-        .session-list, .style-list, .document-list {
+        .session-list, .style-list {
             flex: 1;
             overflow-y: auto;
         }
 
-        .session-item, .style-item, .document-item {
+        .session-item, .style-item {
             padding: 10px;
             border-radius: 8px;
             cursor: pointer;
@@ -146,12 +144,12 @@
             -webkit-backdrop-filter: blur(5px);
         }
 
-        .session-item:hover, .style-item:hover, .document-item:hover {
+        .session-item:hover, .style-item:hover {
             background: var(--accent-color);
             color: white;
         }
 
-        .session-item button, .style-item button, .document-item button {
+        .style-item button {
             background: none;
             border: none;
             color: var(--text-color);
@@ -173,7 +171,7 @@
             background: var(--ai-bg);
         }
 
-        .purge-styles, .purge-documents, .retry-button {
+        .purge-styles {
             padding: 10px;
             background: var(--accent-color);
             color: white;
@@ -187,17 +185,13 @@
             -webkit-backdrop-filter: blur(5px);
         }
 
-        .retry-button {
-            background: var(--error-bg);
-        }
-
-        .purge-styles:hover, .purge-documents:hover, .retry-button:hover {
+        .purge-styles:hover {
             background: #2563eb;
             transform: translateY(-2px);
             box-shadow: 0 8px 20px rgba(0, 0, 0, 0.3);
         }
 
-        .purge-styles:active, .purge-documents:active, .retry-button:active {
+        .purge-styles:active {
             transform: translateY(0);
             box-shadow: var(--shadow);
         }
@@ -297,7 +291,6 @@
             align-self: flex-start;
             border-bottom-left-radius: 4px;
             position: relative;
-            cursor: pointer;
         }
 
         .ai-message-content {
@@ -328,7 +321,7 @@
             opacity: 1;
         }
 
-        .copy-button, .preview-button, .edit-button {
+        .copy-button, .preview-button, .reply-button {
             background: none;
             border: none;
             cursor: pointer;
@@ -337,45 +330,8 @@
             transition: all 0.3s ease;
         }
 
-        .copy-button:hover, .preview-button:hover, .edit-button:hover {
+        .copy-button:hover, .preview-button:hover, .reply-button:hover {
             transform: scale(1.2);
-        }
-
-        .edit-area {
-            display: none;
-            width: 100%;
-            padding: 10px;
-            border: 2px solid var(--border-color);
-            border-radius: 8px;
-            background: var(--input-bg);
-            color: var(--text-color);
-            font-size: 1rem;
-            resize: none;
-        }
-
-        .edit-area.active {
-            display: block;
-        }
-
-        .edit-buttons {
-            display: flex;
-            gap: 10px;
-            margin-top: 10px;
-        }
-
-        .save-edit, .cancel-edit {
-            padding: 8px 15px;
-            background: var(--accent-color);
-            color: white;
-            border: none;
-            border-radius: 8px;
-            cursor: pointer;
-            font-size: 0.9rem;
-            font-weight: 600;
-        }
-
-        .cancel-edit {
-            background: #6b7280;
         }
 
         .typing {
@@ -585,28 +541,6 @@
             transition: width 0.3s ease;
         }
 
-        .rename-modal input {
-            width: 100%;
-            padding: 10px;
-            margin-bottom: 15px;
-            border: 2px solid var(--border-color);
-            border-radius: 8px;
-            background: var(--input-bg);
-            color: var(--text-color);
-            font-size: 1rem;
-        }
-
-        .rename-modal button {
-            padding: 10px 20px;
-            background: var(--accent-color);
-            color: white;
-            border: none;
-            border-radius: 8px;
-            cursor: pointer;
-            font-size: 1rem;
-            font-weight: 600;
-        }
-
         @keyframes gradientShift {
             0% { background-position: 0% 50%; }
             50% { background-position: 100% 50%; }
@@ -675,13 +609,13 @@
         <div class="sidebar" id="sidebar">
             <div class="sidebar-header">
                 <h2>Opciones</h2>
-                <button class="sidebar-toggle" aria-label="Cerrar barra lateral" onclick="toggleSidebar()">✕</button>
+                <button class="sidebar-toggle" onclick="toggleSidebar()">✕</button>
             </div>
-            <input type="text" id="searchInput" placeholder="Buscar en historial..." aria-label="Buscar sesiones">
+            <input type="text" id="searchInput" placeholder="Buscar en historial..." oninput="searchSessions()">
             <h3>Sesiones</h3>
             <div class="session-list" id="sessionList"></div>
             <h3>Configuración de Documento</h3>
-            <select id="docType" aria-label="Tipo de documento">
+            <select id="docType">
                 <option value="general">General</option>
                 <option value="formal_letter">Carta Formal</option>
                 <option value="report">Informe</option>
@@ -690,24 +624,24 @@
                 <option value="resume">Currículum</option>
                 <option value="html">Página Web (HTML)</option>
             </select>
-            <select id="tone" aria-label="Tono del documento">
+            <select id="tone">
                 <option value="neutral">Neutral</option>
                 <option value="formal">Formal</option>
                 <option value="informal">Informal</option>
                 <option value="technical">Técnico</option>
             </select>
-            <select id="length" aria-label="Longitud del documento">
+            <select id="length">
                 <option value="short">Corto</option>
                 <option value="medium">Medio</option>
                 <option value="long">Largo</option>
             </select>
-            <select id="language" aria-label="Idioma del documento">
+            <select id="language">
                 <option value="es">Español</option>
                 <option value="en">Inglés</option>
                 <option value="fr">Francés</option>
             </select>
             <h3>Perfiles de Estilo</h3>
-            <select id="styleProfile" aria-label="Seleccionar perfil de estilo">
+            <select id="styleProfile">
                 <option value="">Ninguno</option>
             </select>
             <div class="style-list" id="styleList"></div>
@@ -715,57 +649,50 @@
             <h3>Subir Documento</h3>
             <div class="upload-area" id="uploadArea">
                 Arrastra o haz clic para subir un PDF/TXT
-                <input type="file" id="fileInput" accept=".pdf,.txt" style="display: none;" aria-label="Subir documento">
+                <input type="file" id="fileInput" accept=".pdf,.txt" style="display: none;">
             </div>
-            <h3>Documentos Analizados</h3>
-            <div class="document-list" id="documentList"></div>
-            <button class="purge-documents" onclick="purgeAnalyzedDocuments()">Purgar Documentos Analizados</button>
         </div>
         <div class="main">
             <div class="header">
-                <button class="sidebar-toggle" aria-label="Abrir barra lateral" onclick="toggleSidebar()">☰</button>
+                <button class="sidebar-toggle" onclick="toggleSidebar()">☰</button>
                 <h1>GarBotGPT</h1>
                 <div class="header-buttons">
-                    <button class="new-session" aria-label="Nueva sesión" onclick="newSession()"><span class="tooltip">Nueva sesión</span>📝</button>
-                    <button class="export-chat" aria-label="Exportar chat" onclick="exportChat()"><span class="tooltip">Exportar chat</span>📤</button>
-                    <button class="clear-chat" aria-label="Limpiar chat" onclick="clearChat()"><span class="tooltip">Limpiar chat</span>🗑️</button>
-                    <button class="theme-toggle" aria-label="Cambiar tema" onclick="toggleTheme()"><span class="tooltip">Cambiar tema</span>☀️</button>
-                    <a href="/logout" class="logout-button" aria-label="Cerrar sesión"><span class="tooltip">Cerrar sesión</span>🚪</a>
+                    <button class="new-session" onclick="newSession()"><span class="tooltip">Nueva sesión</span>📝</button>
+                    <button class="export-chat" onclick="exportChat()"><span class="tooltip">Exportar chat</span>📤</button>
+                    <button class="clear-chat" onclick="clearChat()"><span class="tooltip">Limpiar chat</span>🗑️</button>
+                    <button class="theme-toggle" onclick="toggleTheme()"><span class="tooltip">Cambiar tema</span>☀️</button>
+                    <a href="{{ url_for('logout') }}" class="logout-button"><span class="tooltip">Cerrar sesión</span>🚪</a>
                 </div>
             </div>
-            <div class="chat-area" id="chatArea"></div>
+            <div class="chat-area" id="chatArea">
+                <!-- Mensajes se agregan aquí dinámicamente -->
+            </div>
             <div class="input-area">
                 <div class="progress-bar" id="progressBar"></div>
                 <div class="suggestions" id="suggestions"></div>
                 <div class="input-group">
-                    <textarea id="prompt" placeholder="Describe el documento que deseas generar..." aria-label="Ingresar prompt"></textarea>
-                    <button class="send" onclick="sendMessage()" aria-label="Enviar mensaje">Enviar</button>
+                    <textarea id="prompt" placeholder="Describe el documento que deseas generar..."></textarea>
+                    <button class="send" onclick="sendMessage()">Enviar</button>
                 </div>
             </div>
         </div>
     </div>
     <div class="modal" id="previewModal">
         <div class="modal-content">
-            <button class="modal-close" onclick="closeModal()" aria-label="Cerrar vista previa">✕</button>
+            <button class="modal-close" onclick="closeModal()">✕</button>
             <h2>Vista Previa</h2>
             <div id="previewContent"></div>
-            <button class="send" onclick="downloadCurrentContent()" aria-label="Descargar documento">Descargar</button>
-        </div>
-    </div>
-    <div class="modal" id="renameModal">
-        <div class="modal-content rename-modal">
-            <button class="modal-close" onclick="closeRenameModal()" aria-label="Cerrar renombrar sesión">✕</button>
-            <h2>Renombrar Sesión</h2>
-            <input type="text" id="renameInput" placeholder="Nuevo nombre de la sesión" aria-label="Nuevo nombre de la sesión">
-            <button onclick="saveSessionName()" aria-label="Guardar nombre de sesión">Guardar</button>
+            <button class="send" onclick="downloadCurrentContent()">Descargar</button>
         </div>
     </div>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script>
+        // Configurar opciones de marked.js para manejar mejor el Markdown
         marked.setOptions({
-            breaks: true,
-            gfm: true,
+            breaks: true, // Permitir saltos de línea simples
+            gfm: true, // Habilitar GitHub Flavored Markdown
             highlight: function(code, lang) {
+                // Opcional: Añadir resaltado de sintaxis si usas una librería como highlight.js
                 return code;
             }
         });
@@ -773,10 +700,8 @@
         const chatArea = document.getElementById('chatArea');
         const promptInput = document.getElementById('prompt');
         const previewModal = document.getElementById('previewModal');
-        const renameModal = document.getElementById('renameModal');
         const sessionList = document.getElementById('sessionList');
         const styleList = document.getElementById('styleList');
-        const documentList = document.getElementById('documentList');
         const searchInput = document.getElementById('searchInput');
         const progressBar = document.getElementById('progressBar');
         const uploadArea = document.getElementById('uploadArea');
@@ -784,10 +709,11 @@
         const suggestionsContainer = document.getElementById('suggestions');
         let currentContentBlob = null;
         let currentContentType = 'pdf';
-        let currentSessionId = localStorage.getItem('currentSessionId') || null;
+        let currentSessionId = 'default';
+        let sessions = JSON.parse(localStorage.getItem('sessions') || '{}');
         let offlineQueue = [];
-        let renameSessionId = null;
 
+        // Lista de sugerencias base
         const baseSuggestions = [
             { prompt: 'Escribe una carta formal', description: 'Genera una carta profesional para negocios o comunicaciones oficiales.' },
             { prompt: 'Redacta un informe técnico', description: 'Crea un informe detallado con estructura técnica y datos.' },
@@ -796,169 +722,23 @@
             { prompt: 'Explica qué es la inteligencia artificial', description: 'Proporciona una explicación estructurada sobre IA.' }
         ];
 
-        function showToast(message, type = 'info') {
-            const toast = document.createElement('div');
-            toast.className = 'toast';
-            toast.textContent = message;
-            document.body.appendChild(toast);
-            setTimeout(() => toast.remove(), 5000);
+        // Cargar sesiones
+        function loadSessions() {
+            sessionList.innerHTML = '';
+            Object.keys(sessions).forEach(id => {
+                const session = sessions[id];
+                const item = document.createElement('div');
+                item.className = 'session-item';
+                item.textContent = session.name || `Sesión ${id}`;
+                item.onclick = () => loadSession(id);
+                sessionList.appendChild(item);
+            });
         }
 
-        function debounce(func, wait) {
-            let timeout;
-            return function executedFunction(...args) {
-                const later = () => {
-                    clearTimeout(timeout);
-                    func(...args);
-                };
-                clearTimeout(timeout);
-                timeout = setTimeout(later, wait);
-            };
-        }
-
-        async function loadSessions() {
-            try {
-                const response = await fetch('/sessions');
-                if (!response.ok) throw new Error(`Error ${response.status}: ${await response.text()}`);
-                const sessions = await response.json();
-                sessionList.innerHTML = '';
-                Object.keys(sessions).forEach(id => {
-                    const session = sessions[id];
-                    const item = document.createElement('div');
-                    item.className = 'session-item';
-                    item.innerHTML = `
-                        ${session.name}
-                        <div>
-                            <button aria-label="Renombrar sesión" onclick="renameSession('${id}')">✏️</button>
-                            <button aria-label="Eliminar sesión" onclick="deleteSession('${id}')">🗑️</button>
-                        </div>
-                    `;
-                    item.onclick = (e) => {
-                        if (e.target.tagName !== 'BUTTON') loadSession(id);
-                    };
-                    sessionList.appendChild(item);
-                });
-                if (currentSessionId) {
-                    loadSession(currentSessionId);
-                } else if (Object.keys(sessions).length > 0) {
-                    const latestSessionId = Object.keys(sessions).sort((a, b) => 
-                        new Date(sessions[b].created_at) - new Date(sessions[a].created_at))[0];
-                    loadSession(latestSessionId);
-                }
-            } catch (error) {
-                showToast(`Error al cargar sesiones: ${error.message}`, 'error');
-            }
-        }
-
-        async function loadSession(sessionId) {
-            try {
-                const response = await fetch(`/session/${sessionId}`);
-                if (!response.ok) throw new Error(`Error ${response.status}: ${await response.text()}`);
-                const session = await response.json();
-                currentSessionId = sessionId;
-                localStorage.setItem('currentSessionId', sessionId);
-                chatArea.innerHTML = '';
-                session.messages.forEach((msg, index) => {
-                    addMessage(msg.content, msg.role === 'user' ? 'user' : 'ai', msg.content_type, index);
-                });
-                showToast('Sesión cargada');
-            } catch (error) {
-                showToast(`Error al cargar sesión: ${error.message}`, 'error');
-            }
-        }
-
-        async function newSession() {
-            try {
-                const response = await fetch('/session', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ name: `Sesión ${new Date().toLocaleString()}` })
-                });
-                if (!response.ok) throw new Error(`Error ${response.status}: ${await response.text()}`);
-                const session = await response.json();
-                currentSessionId = session.id;
-                localStorage.setItem('currentSessionId', session.id);
-                chatArea.innerHTML = '';
-                await loadSessions();
-                showToast('Nueva sesión creada');
-            } catch (error) {
-                showToast(`Error al crear sesión: ${error.message}`, 'error');
-            }
-        }
-
-        async function renameSession(sessionId) {
-            renameSessionId = sessionId;
-            renameModal.style.display = 'flex';
-            document.getElementById('renameInput').value = '';
-        }
-
-        async function saveSessionName() {
-            const newName = document.getElementById('renameInput').value.trim();
-            if (!newName || newName.length > 100) {
-                showToast('El nombre debe tener entre 1 y 100 caracteres', 'error');
-                return;
-            }
-            try {
-                const response = await fetch(`/session/${renameSessionId}`, {
-                    method: 'PUT',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ name: newName })
-                });
-                if (!response.ok) throw new Error(`Error ${response.status}: ${await response.text()}`);
-                closeRenameModal();
-                await loadSessions();
-                showToast('Sesión renombrada');
-            } catch (error) {
-                showToast(`Error al renombrar sesión: ${error.message}`, 'error');
-            }
-        }
-
-        function closeRenameModal() {
-            renameModal.style.display = 'none';
-            renameSessionId = null;
-        }
-
-        async function deleteSession(sessionId) {
-            if (!confirm('¿Estás seguro de que quieres eliminar esta sesión?')) return;
-            try {
-                const response = await fetch(`/session/${sessionId}`, {
-                    method: 'DELETE'
-                });
-                if (!response.ok) throw new Error(`Error ${response.status}: ${await response.text()}`);
-                if (currentSessionId === sessionId) {
-                    currentSessionId = null;
-                    localStorage.removeItem('currentSessionId');
-                    chatArea.innerHTML = '';
-                }
-                await loadSessions();
-                showToast('Sesión eliminada');
-            } catch (error) {
-                showToast(`Error al eliminar sesión: ${error.message}`, 'error');
-            }
-        }
-
-        async function clearChat() {
-            if (!currentSessionId) {
-                showToast('No hay sesión activa', 'error');
-                return;
-            }
-            if (!confirm('¿Estás seguro de que quieres limpiar esta sesión?')) return;
-            try {
-                const response = await fetch(`/session/${currentSessionId}/clear`, {
-                    method: 'POST'
-                });
-                if (!response.ok) throw new Error(`Error ${response.status}: ${await response.text()}`);
-                chatArea.innerHTML = '';
-                showToast('Chat limpiado');
-            } catch (error) {
-                showToast(`Error al limpiar chat: ${error.message}`, 'error');
-            }
-        }
-
+        // Cargar perfiles de estilo
         async function loadStyleProfiles() {
             try {
                 const response = await fetch('/style_profiles');
-                if (!response.ok) throw new Error(`Error ${response.status}: ${await response.text()}`);
                 const profiles = await response.json();
                 styleList.innerHTML = '';
                 const styleSelect = document.getElementById('styleProfile');
@@ -968,8 +748,8 @@
                     const item = document.createElement('div');
                     item.className = 'style-item';
                     item.innerHTML = `
-                        ${profile.font_name} (${profile.tone}, ${profile.structure.join(', ')})
-                        <button aria-label="Eliminar perfil de estilo" onclick="deleteStyleProfile('${id}')">🗑️</button>
+                        ${profile.font_name} (${profile.tone})
+                        <button onclick="deleteStyleProfile('${id}')">🗑️</button>
                     `;
                     item.onclick = (e) => {
                         if (e.target.tagName !== 'BUTTON') {
@@ -983,305 +763,333 @@
                     styleSelect.appendChild(option);
                 });
             } catch (error) {
-                styleList.innerHTML = `
-                    <p>Error al cargar perfiles: ${error.message}</p>
-                    <button class="retry-button" onclick="loadStyleProfiles()">Reintentar</button>
-                `;
                 showToast(`Error al cargar perfiles: ${error.message}`, 'error');
             }
         }
 
-        async function deleteStyleProfile(profileId) {
-            if (!confirm('¿Estás seguro de que quieres eliminar este perfil de estilo?')) return;
+        // Eliminar perfil de estilo
+        async function deleteStyleProfile(id) {
             try {
-                const response = await fetch(`/style_profiles/${profileId}`, {
-                    method: 'DELETE'
-                });
-                if (!response.ok) throw new Error(`Error ${response.status}: ${await response.text()}`);
-                await loadStyleProfiles();
-                showToast('Perfil de estilo eliminado');
+                const response = await fetch(`/style_profiles/${id}`, { method: 'DELETE' });
+                const data = await response.json();
+                showToast(data.message);
+                loadStyleProfiles();
             } catch (error) {
-                showToast(`Error al eliminar perfil: ${error.message}`, 'error');
+                showToast(`Error: ${error.message}`, 'error');
             }
         }
 
+        // Purgar todos los perfiles de estilo
         async function purgeStyleProfiles() {
             if (!confirm('¿Estás seguro de que quieres eliminar todos los perfiles de estilo?')) return;
             try {
-                const response = await fetch('/purge_style_profiles', {
-                    method: 'DELETE'
-                });
-                if (!response.ok) throw new Error(`Error ${response.status}: ${await response.text()}`);
-                await loadStyleProfiles();
-                showToast('Todos los perfiles de estilo eliminados');
+                const response = await fetch('/purge_style_profiles', { method: 'DELETE' });
+                const data = await response.json();
+                if (data.error) {
+                    showToast(`Error: ${data.error}`, 'error');
+                } else {
+                    showToast(data.message);
+                    loadStyleProfiles();
+                    document.getElementById('styleProfile').value = '';
+                }
             } catch (error) {
-                showToast(`Error al purgar perfiles: ${error.message}`, 'error');
+                showToast(`Error: ${error.message}`, 'error');
             }
         }
 
-        async function loadAnalyzedDocuments() {
-            try {
-                const response = await fetch('/analyzed_documents');
-                if (!response.ok) throw new Error(`Error ${response.status}: ${await response.text()}`);
-                const documents = await response.json();
-                documentList.innerHTML = '';
-                Object.keys(documents).forEach(id => {
-                    const doc = documents[id];
+        // Cargar sesión específica
+        function loadSession(id) {
+            currentSessionId = id;
+            chatArea.innerHTML = '';
+            (sessions[id].messages || []).forEach(msg => addMessage(msg.content, msg.isUser, msg.contentType || 'pdf', false));
+            toggleSidebar();
+            showToast('Sesión cargada');
+            updateSuggestions();
+        }
+
+        // Nueva sesión
+        function newSession() {
+            const name = prompt('Nombre de la nueva sesión:') || `Sesión ${Date.now()}`;
+            currentSessionId = Date.now().toString();
+            sessions[currentSessionId] = { name, messages: [] };
+            chatArea.innerHTML = '';
+            saveSessions();
+            loadSessions();
+            showToast('Nueva sesión creada');
+            updateSuggestions();
+        }
+
+        // Guardar sesiones
+        function saveSessions() {
+            localStorage.setItem('sessions', JSON.stringify(sessions));
+        }
+
+        // Buscar en sesiones
+        function searchSessions() {
+            const query = searchInput.value.toLowerCase();
+            sessionList.innerHTML = '';
+            Object.keys(sessions).forEach(id => {
+                const session = sessions[id];
+                if (session.name.toLowerCase().includes(query) || session.messages.some(msg => msg.content.toLowerCase().includes(query))) {
                     const item = document.createElement('div');
-                    item.className = 'document-item';
-                    item.innerHTML = `
-                        ${doc.filename}
-                        <button aria-label="Eliminar documento analizado" onclick="deleteAnalyzedDocument('${id}')">🗑️</button>
-                    `;
-                    documentList.appendChild(item);
-                });
-            } catch (error) {
-                showToast(`Error al cargar documentos analizados: ${error.message}`, 'error');
+                    item.className = 'session-item';
+                    item.textContent = session.name || `Sesión ${id}`;
+                    item.onclick = () => loadSession(id);
+                    sessionList.appendChild(item);
+                }
+            });
+        }
+
+        // Mostrar notificación toast
+        function showToast(message, type = 'info') {
+            const toast = document.createElement('div');
+            toast.className = 'toast';
+            toast.innerHTML = `${type === 'error' ? '❌' : '✅'} ${message}`;
+            document.body.appendChild(toast);
+            setTimeout(() => toast.remove(), 4000);
+        }
+
+        // Actualizar sugerencias dinámicas
+        function updateSuggestions() {
+            suggestionsContainer.innerHTML = '';
+            const sessionMessages = sessions[currentSessionId]?.messages || [];
+            const recentPrompts = sessionMessages
+                .filter(msg => msg.isUser)
+                .map(msg => msg.content)
+                .slice(-3);
+            
+            const suggestions = [
+                ...baseSuggestions,
+                ...recentPrompts.map(prompt => ({
+                    prompt,
+                    description: 'Basado en tu historial reciente.'
+                }))
+            ].slice(0, 5); // Limitar a 5 sugerencias
+
+            suggestions.forEach(({ prompt, description }) => {
+                const suggestion = document.createElement('div');
+                suggestion.className = 'suggestion';
+                suggestion.innerHTML = `
+                    ${prompt}
+                    <span class="suggestion-tooltip">${description}</span>
+                `;
+                suggestion.onclick = () => useSuggestion(prompt);
+                suggestionsContainer.appendChild(suggestion);
+            });
+        }
+
+        // Usar una sugerencia
+        function useSuggestion(prompt) {
+            promptInput.value = prompt;
+            promptInput.focus();
+            sendMessage();
+        }
+
+        // Agregar mensaje
+        function addMessage(content, isUser = false, contentType = 'pdf', save = true) {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = isUser ? 'message user-message' : 'message ai-message';
+            if (isUser) {
+                messageDiv.textContent = content;
+                messageDiv.onclick = () => editMessage(messageDiv);
+            } else {
+                // Escapar el contenido para evitar inyecciones y luego parsear como Markdown
+                const escapedContent = content
+                    .replace(/&/g, '&')
+                    .replace(/</g, '<')
+                    .replace(/>/g, '>');
+                const renderedContent = marked.parse(escapedContent);
+                messageDiv.innerHTML = `
+                    <div class="ai-message-content">${renderedContent}</div>
+                    <div class="message-buttons">
+                        <button class="copy-button" onclick="copyMessage(this)" title="Copiar">📋</button>
+                        <button class="preview-button" onclick="previewContent(this, '${contentType}')" title="Vista previa">📄</button>
+                        <button class="reply-button" onclick="replyToMessage(this)" title="Responder">↩️</button>
+                    </div>`;
+            }
+            chatArea.appendChild(messageDiv);
+            // Forzar el scroll al último mensaje
+            chatArea.scrollTo({ top: chatArea.scrollHeight, behavior: 'smooth' });
+            if (save) {
+                sessions[currentSessionId] = sessions[currentSessionId] || { name: `Sesión ${currentSessionId}`, messages: [] };
+                sessions[currentSessionId].messages.push({ content, isUser, contentType });
+                saveSessions();
             }
         }
 
-        async function deleteAnalyzedDocument(docId) {
-            if (!confirm('¿Estás seguro de que quieres eliminar este documento analizado?')) return;
-            try {
-                const response = await fetch(`/analyzed_documents/${docId}`, {
-                    method: 'DELETE'
-                });
-                if (!response.ok) throw new Error(`Error ${response.status}: ${await response.text()}`);
-                await loadAnalyzedDocuments();
-                showToast('Documento analizado eliminado');
-            } catch (error) {
-                showToast(`Error al eliminar documento: ${error.message}`, 'error');
-            }
+        // Editar mensaje
+        function editMessage(messageDiv) {
+            const currentText = messageDiv.textContent;
+            promptInput.value = currentText;
+            messageDiv.remove();
+            sessions[currentSessionId].messages = sessions[currentSessionId].messages.filter(msg => msg.content !== currentText);
+            saveSessions();
+            promptInput.focus();
         }
 
-        async function purgeAnalyzedDocuments() {
-            if (!confirm('¿Estás seguro de que quieres eliminar todos los documentos analizados?')) return;
-            try {
-                const response = await fetch('/analyzed_documents', {
-                    method: 'DELETE'
-                });
-                if (!response.ok) throw new Error(`Error ${response.status}: ${await response.text()}`);
-                await loadAnalyzedDocuments();
-                showToast('Todos los documentos analizados eliminados');
-            } catch (error) {
-                showToast(`Error al purgar documentos: ${error.message}`, 'error');
-            }
+        // Responder a mensaje
+        function replyToMessage(button) {
+            const messageText = button.parentElement.previousElementSibling.textContent;
+            promptInput.value = `Refiriéndote a: "${messageText.slice(0, 50)}..."\n`;
+            promptInput.focus();
         }
 
+        // Indicador de escritura
+        function addTypingIndicator() {
+            const typingDiv = document.createElement('div');
+            typingDiv.className = 'typing';
+            typingDiv.innerHTML = 'GarBotGPT está procesando contexto <span></span><span></span><span></span>';
+            typingDiv.id = 'typingIndicator';
+            chatArea.appendChild(typingDiv);
+            chatArea.scrollTo({ top: chatArea.scrollHeight, behavior: 'smooth' });
+        }
+
+        function removeTypingIndicator() {
+            const typingIndicator = document.getElementById('typingIndicator');
+            if (typingIndicator) typingIndicator.remove();
+        }
+
+        // Enviar mensaje
         async function sendMessage() {
             const prompt = promptInput.value.trim();
-            if (!prompt) {
-                showToast('Por favor, ingresa un mensaje', 'error');
-                return;
-            }
-            if (!currentSessionId) {
-                await newSession();
-            }
-            addMessage(prompt, 'user');
-            promptInput.value = '';
-            const typingIndicator = document.createElement('div');
-            typingIndicator.className = 'typing';
-            typingIndicator.innerHTML = 'GarBotGPT está procesando contexto... <span></span><span></span><span></span>';
-            chatArea.appendChild(typingIndicator);
-            chatArea.scrollTop = chatArea.scrollHeight;
+            if (!prompt) return;
 
-            let progress = 0;
-            const progressInterval = setInterval(() => {
-                progress += 10;
-                progressBar.style.width = `${progress}%`;
-                if (progress >= 100) progress = 0;
-            }, 200);
+            addMessage(prompt, true);
+            promptInput.value = '';
+            promptInput.style.height = '60px';
+            addTypingIndicator();
+            progressBar.style.width = '30%';
 
             try {
-                const messageHistory = Array.from(chatArea.children)
-                    .filter(el => el.classList.contains('message'))
-                    .map(el => ({
-                        role: el.classList.contains('user-message') ? 'user' : 'assistant',
-                        content: el.dataset.rawContent || el.querySelector('.message-content').innerText,
-                        content_type: el.dataset.contentType || 'general'
-                    }));
+                const docType = document.getElementById('docType').value;
+                const tone = document.getElementById('tone').value;
+                const length = document.getElementById('length').value;
+                const language = document.getElementById('language').value;
+                const styleProfile = document.getElementById('styleProfile').value || null;
+
+                // Preparar historial de mensajes
+                const messageHistory = (sessions[currentSessionId]?.messages || []).map(msg => ({
+                    role: msg.isUser ? 'user' : 'assistant',
+                    content: msg.content
+                }));
 
                 const response = await fetch('/generate', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        prompt,
-                        session_id: currentSessionId,
-                        doc_type: document.getElementById('docType').value,
-                        tone: document.getElementById('tone').value,
-                        length: document.getElementById('length').value,
-                        language: document.getElementById('language').value,
-                        style_profile_id: document.getElementById('styleProfile').value,
+                    body: JSON.stringify({ 
+                        prompt, 
+                        session_id: currentSessionId, 
+                        doc_type: docType, 
+                        tone, 
+                        length, 
+                        language, 
+                        style_profile_id: styleProfile,
                         message_history: messageHistory
                     })
                 });
-
-                clearInterval(progressInterval);
-                progressBar.style.width = '0';
-                typingIndicator.remove();
-
-                if (!response.ok) throw new Error(`Error ${response.status}: ${await response.text()}`);
+                progressBar.style.width = '100%';
+                setTimeout(() => progressBar.style.width = '0', 300);
                 const data = await response.json();
-                addMessage(data.document, 'ai', data.content_type);
-                chatArea.scrollTop = chatArea.scrollHeight;
-            } catch (error) {
-                clearInterval(progressInterval);
-                progressBar.style.width = '0';
-                typingIndicator.remove();
-                if (navigator.onLine) {
-                    showToast(`Error al generar respuesta: ${error.message}`, 'error');
+                removeTypingIndicator();
+                if (data.error) {
+                    addMessage(`Error: ${data.error}`);
+                    offlineQueue.push(prompt);
                 } else {
-                    offlineQueue.push({ prompt, sessionId: currentSessionId });
-                    showToast('Sin conexión. Mensaje guardado para reintentar.', 'info');
+                    addMessage(data.document, false, data.content_type);
+                    offlineQueue = offlineQueue.filter(p => p !== prompt);
+                    updateSuggestions();
                 }
-            }
-        }
-
-        function addMessage(content, type, contentType = 'general', index = null) {
-            const message = document.createElement('div');
-            message.className = `message ${type === 'user' ? 'user-message' : 'ai-message'}`;
-            message.dataset.contentType = contentType;
-            message.dataset.index = index !== null ? index : chatArea.children.length;
-            message.dataset.rawContent = content;
-
-            const contentDiv = document.createElement('div');
-            contentDiv.className = 'message-content';
-            contentDiv.classList.add(type === 'ai' ? 'ai-message-content' : '');
-            contentDiv.innerHTML = type === 'ai' ? marked.parse(content) : content;
-
-            const buttonsDiv = document.createElement('div');
-            buttonsDiv.className = 'message-buttons';
-            buttonsDiv.innerHTML = `
-                <button class="copy-button" aria-label="Copiar mensaje" onclick="copyMessage(this)">📋</button>
-                ${type === 'ai' ? `<button class="preview-button" aria-label="Vista previa del mensaje" onclick="previewMessage(this, '${contentType}')">📄</button>` : ''}
-                <button class="edit-button" aria-label="Editar mensaje" onclick="editMessage(this)">✏️</button>
-            `;
-
-            const editArea = document.createElement('textarea');
-            editArea.className = 'edit-area';
-
-            const editButtons = document.createElement('div');
-            editButtons.className = 'edit-buttons';
-            editButtons.style.display = 'none';
-            editButtons.innerHTML = `
-                <button class="save-edit" onclick="saveEdit(this)">Guardar</button>
-                <button class="cancel-edit" onclick="cancelEdit(this)">Cancelar</button>
-            `;
-
-            message.appendChild(contentDiv);
-            message.appendChild(buttonsDiv);
-            message.appendChild(editArea);
-            message.appendChild(editButtons);
-            chatArea.appendChild(message);
-            chatArea.scrollTop = chatArea.scrollHeight;
-        }
-
-        async function copyMessage(button) {
-            const content = button.parentElement.parentElement.dataset.rawContent;
-            try {
-                await navigator.clipboard.writeText(content);
-                showToast('Mensaje copiado al portapapeles');
             } catch (error) {
-                showToast(`Error al copiar: ${error.message}`, 'error');
+                removeTypingIndicator();
+                addMessage(`Error: ${error.message}`);
+                offlineQueue.push(prompt);
+                showToast('Guardado para reintentar', 'error');
             }
         }
 
-        async function previewMessage(button, contentType) {
-            const content = button.parentElement.parentElement.dataset.rawContent;
+        // Copiar mensaje
+        function copyMessage(button) {
+            const messageContent = button.parentElement.previousElementSibling.innerText;
+            navigator.clipboard.writeText(messageContent).then(() => {
+                button.textContent = '✅';
+                showToast('Texto copiado');
+                setTimeout(() => button.textContent = '📋', 2000);
+            }).catch(err => {
+                showToast('Error al copiar: ' + err, 'error');
+            });
+        }
+
+        // Vista previa de contenido
+        async function previewContent(button, contentType) {
+            const messageText = button.parentElement.previousElementSibling.innerText;
+            const styleProfile = document.getElementById('styleProfile').value || null;
             try {
                 const response = await fetch('/generate_preview', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        content,
+                    body: JSON.stringify({ 
+                        content: messageText, 
                         content_type: contentType,
-                        style_profile_id: document.getElementById('styleProfile').value
+                        style_profile_id: styleProfile 
                     })
                 });
-
-                if (!response.ok) throw new Error(`Error ${response.status}: ${await response.text()}`);
-
+                if (!response.ok) {
+                    const data = await response.json();
+                    showToast(`Error: ${data.error}`, 'error');
+                    return;
+                }
                 const previewContent = document.getElementById('previewContent');
                 if (contentType === 'html') {
                     const data = await response.json();
-                    previewContent.innerHTML = `<iframe src="/preview_html/${data.preview_id}" style="width:100%;height:500px;border:none;"></iframe>`;
+                    previewContent.innerHTML = `<iframe src="/preview_html/${data.preview_id}" width="100%" height="500px"></iframe>`;
                     currentContentType = 'html';
-                    currentContentBlob = new Blob([content], { type: 'text/html' });
                 } else {
-                    const blob = await response.blob();
-                    const url = URL.createObjectURL(blob);
-                    previewContent.innerHTML = `<embed src="${url}" width="100%" height="500px" type="application/pdf">`;
+                    currentContentBlob = await response.blob();
+                    const url = window.URL.createObjectURL(currentContentBlob);
+                    previewContent.innerHTML = `<iframe src="${url}" width="100%" height="500px"></iframe>`;
                     currentContentType = 'pdf';
-                    currentContentBlob = blob;
                 }
                 previewModal.style.display = 'flex';
             } catch (error) {
-                showToast(`Error al generar vista previa: ${error.message}`, 'error');
+                showToast(`Error: ${error.message}`, 'error');
             }
         }
 
-        function editMessage(button) {
-            const message = button.closest('.message');
-            const contentDiv = message.querySelector('.message-content');
-            const editArea = message.querySelector('.edit-area');
-            const editButtons = message.querySelector('.edit-buttons');
-            contentDiv.style.display = 'none';
-            editArea.value = message.dataset.rawContent;
-            editArea.classList.add('active');
-            editButtons.style.display = 'flex';
-            message.querySelector('.message-buttons').style.opacity = '0';
-        }
-
-        async function saveEdit(button) {
-            const message = button.closest('.message');
-            const contentDiv = message.querySelector('.message-content');
-            const editArea = message.querySelector('.edit-area');
-            const newContent = editArea.value.trim();
-            if (!newContent) {
-                showToast('El mensaje no puede estar vacío', 'error');
-                return;
-            }
-            try {
-                const response = await fetch(`/session/${currentSessionId}/message/${message.dataset.index}`, {
-                    method: 'PUT',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ content: newContent })
-                });
-                if (!response.ok) throw new Error(`Error ${response.status}: ${await response.text()}`);
-                message.dataset.rawContent = newContent;
-                contentDiv.innerHTML = message.classList.contains('ai-message') ? marked.parse(newContent) : newContent;
-                contentDiv.style.display = 'block';
-                editArea.classList.remove('active');
-                button.parentElement.style.display = 'none';
-                showToast('Mensaje actualizado');
-            } catch (error) {
-                showToast(`Error al guardar mensaje: ${error.message}`, 'error');
-            }
-        }
-
-        function cancelEdit(button) {
-            const message = button.closest('.message');
-            const contentDiv = message.querySelector('.message-content');
-            const editArea = message.querySelector('.edit-area');
-            contentDiv.style.display = 'block';
-            editArea.classList.remove('active');
-            button.parentElement.style.display = 'none';
-        }
-
+        // Descargar contenido
         function downloadCurrentContent() {
-            if (!currentContentBlob) {
+            if (currentContentType === 'html') {
+                const iframe = document.querySelector('#previewContent iframe');
+                if (iframe) {
+                    fetch(iframe.src)
+                        .then(res => res.text())
+                        .then(html => {
+                            const blob = new Blob([html], { type: 'text/html' });
+                            const url = window.URL.createObjectURL(blob);
+                            const a = document.createElement('a');
+                            a.href = url;
+                            a.download = 'pagina_web.html';
+                            document.body.appendChild(a);
+                            a.click();
+                            document.body.removeChild(a);
+                            window.URL.revokeObjectURL(url);
+                        })
+                        .catch(err => showToast(`Error al descargar: ${err.message}`, 'error'));
+                }
+            } else if (currentContentBlob) {
+                const url = window.URL.createObjectURL(currentContentBlob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = 'documento_generado.pdf';
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                window.URL.revokeObjectURL(url);
+            } else {
                 showToast('No hay contenido para descargar', 'error');
-                return;
             }
-            const url = URL.createObjectURL(currentContentBlob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `garbotgpt_document.${currentContentType}`;
-            a.click();
-            URL.revokeObjectURL(url);
-            showToast('Documento descargado');
         }
 
+        // Cerrar modal
         function closeModal() {
             previewModal.style.display = 'none';
             document.getElementById('previewContent').innerHTML = '';
@@ -1289,113 +1097,81 @@
             currentContentType = 'pdf';
         }
 
-        function toggleTheme() {
-            const isDark = document.documentElement.dataset.theme === 'dark';
-            document.documentElement.dataset.theme = isDark ? 'light' : 'dark';
-            localStorage.setItem('theme', isDark ? 'light' : 'dark');
-            document.querySelector('.theme-toggle').textContent = isDark ? '☀️' : '🌙';
-            showToast(`Tema ${isDark ? 'claro' : 'oscuro'} activado`);
+        // Limpiar chat
+        function clearChat() {
+            if (!confirm('¿Estás seguro de que quieres limpiar el chat?')) return;
+            chatArea.innerHTML = '';
+            sessions[currentSessionId].messages = [];
+            saveSessions();
+            showToast('Chat limpiado');
+            updateSuggestions();
         }
 
+        // Exportar chat
+        function exportChat() {
+            const messages = sessions[currentSessionId]?.messages || [];
+            if (messages.length === 0) {
+                showToast('No hay mensajes para exportar', 'error');
+                return;
+            }
+            const chatText = messages.map(msg => `${msg.isUser ? 'Usuario' : 'GarBotGPT'}: ${msg.content}`).join('\n\n');
+            const blob = new Blob([chatText], { type: 'text/plain' });
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `chat_sesion_${currentSessionId}.txt`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            window.URL.revokeObjectURL(url);
+            showToast('Chat exportado');
+        }
+
+        // Cambiar tema
+        function toggleTheme() {
+            const currentTheme = document.documentElement.getAttribute('data-theme');
+            const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+            document.documentElement.setAttribute('data-theme', newTheme);
+            localStorage.setItem('theme', newTheme);
+            document.querySelector('.theme-toggle').textContent = newTheme === 'dark' ? '☀️' : '🌙';
+            showToast(`Tema ${newTheme === 'dark' ? 'oscuro' : 'claro'} activado`);
+        }
+
+        // Alternar sidebar
         function toggleSidebar() {
             const sidebar = document.getElementById('sidebar');
             sidebar.classList.toggle('hidden');
         }
 
-        const searchSessions = debounce(() => {
-            const query = searchInput.value.toLowerCase();
-            const sessionItems = sessionList.children;
-            Array.from(sessionItems).forEach(item => {
-                const name = item.textContent.toLowerCase();
-                item.style.display = name.includes(query) ? '' : 'none';
-            });
-        }, 300);
-
-        function exportChat() {
-            if (!currentSessionId) {
-                showToast('No hay sesión activa para exportar', 'error');
-                return;
-            }
-            const messages = Array.from(chatArea.children)
-                .filter(el => el.classList.contains('message'))
-                .map(el => {
-                    const role = el.classList.contains('user-message') ? 'Usuario' : 'GarBotGPT';
-                    const content = el.dataset.rawContent || el.querySelector('.message-content').innerText;
-                    return `${role}: ${content}`;
-                }).join('\n\n');
-            const blob = new Blob([messages], { type: 'text/plain' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `chat_${currentSessionId}.txt`;
-            a.click();
-            URL.revokeObjectURL(url);
-            showToast('Chat exportado');
-        }
-
-        function handleFileUpload(file) {
-            if (!file || !['application/pdf', 'text/plain'].includes(file.type)) {
-                showToast('Solo se permiten archivos PDF o TXT', 'error');
-                return;
-            }
-            if (file.size > 10 * 1024 * 1024) {
-                showToast('El archivo excede el límite de 10MB', 'error');
-                return;
-            }
+        // Subir documento
+        async function uploadDocument(file) {
+            if (!file) return;
             const formData = new FormData();
             formData.append('file', file);
-            fetch('/analyze_document', {
-                method: 'POST',
-                body: formData
-            })
-            .then(response => {
-                if (!response.ok) throw new Error(`Error ${response.status}: ${response.statusText}`);
-                return response.json();
-            })
-            .then(data => {
-                loadStyleProfiles();
-                loadAnalyzedDocuments();
-                showToast('Documento analizado y perfil de estilo creado');
-            })
-            .catch(error => {
-                showToast(`Error al analizar documento: ${error.message}`, 'error');
-            });
-        }
-
-        function loadSuggestions() {
-            suggestionsContainer.innerHTML = '';
-            baseSuggestions.forEach(suggestion => {
-                const div = document.createElement('div');
-                div.className = 'suggestion';
-                div.textContent = suggestion.prompt;
-                div.innerHTML += `<span class="suggestion-tooltip">${suggestion.description}</span>`;
-                div.onclick = () => {
-                    promptInput.value = suggestion.prompt;
-                    sendMessage();
-                };
-                suggestionsContainer.appendChild(div);
-            });
-        }
-
-        window.addEventListener('online', () => {
-            if (offlineQueue.length > 0) {
-                showToast('Conexión restaurada. Reenviando mensajes...');
-                offlineQueue.forEach(({ prompt, sessionId }) => {
-                    currentSessionId = sessionId;
-                    promptInput.value = prompt;
-                    sendMessage();
+            try {
+                const response = await fetch('/analyze_document', {
+                    method: 'POST',
+                    body: formData
                 });
-                offlineQueue = [];
+                const data = await response.json();
+                if (data.error) {
+                    showToast(`Error: ${data.error}`, 'error');
+                } else {
+                    showToast('Documento analizado y perfil de estilo creado');
+                    loadStyleProfiles();
+                }
+            } catch (error) {
+                showToast(`Error al subir: ${error.message}`, 'error');
             }
-        });
+        }
 
-        window.addEventListener('offline', () => {
-            showToast('Sin conexión. Los mensajes se guardarán para reintentar.', 'info');
-        });
-
+        // Configurar eventos para el área de subida
         uploadArea.addEventListener('click', () => fileInput.click());
-        fileInput.addEventListener('change', (e) => {
-            if (e.target.files.length > 0) handleFileUpload(e.target.files[0]);
+        fileInput.addEventListener('change', () => {
+            if (fileInput.files.length) {
+                uploadDocument(fileInput.files[0]);
+                fileInput.value = '';
+            }
         });
         uploadArea.addEventListener('dragover', (e) => {
             e.preventDefault();
@@ -1407,9 +1183,21 @@
         uploadArea.addEventListener('drop', (e) => {
             e.preventDefault();
             uploadArea.classList.remove('dragover');
-            if (e.dataTransfer.files.length > 0) handleFileUpload(e.dataTransfer.files[0]);
+            const file = e.dataTransfer.files[0];
+            if (file && (file.type === 'application/pdf' || file.type === 'text/plain')) {
+                uploadDocument(file);
+            } else {
+                showToast('Por favor, sube un archivo PDF o TXT', 'error');
+            }
         });
 
+        // Ajustar altura del textarea automáticamente
+        promptInput.addEventListener('input', () => {
+            promptInput.style.height = '60px';
+            promptInput.style.height = `${promptInput.scrollHeight}px`;
+        });
+
+        // Enviar mensaje con Enter
         promptInput.addEventListener('keypress', (e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
@@ -1417,16 +1205,44 @@
             }
         });
 
-        searchInput.addEventListener('input', searchSessions);
-
+        // Inicialización al cargar la página
         document.addEventListener('DOMContentLoaded', () => {
+            // Cargar tema guardado
             const savedTheme = localStorage.getItem('theme') || 'light';
-            document.documentElement.dataset.theme = savedTheme;
-            document.querySelector('.theme-toggle').textContent = savedTheme === 'light' ? '☀️' : '🌙';
+            document.documentElement.setAttribute('data-theme', savedTheme);
+            document.querySelector('.theme-toggle').textContent = savedTheme === 'dark' ? '☀️' : '🌙';
+
+            // Cargar sesiones y perfiles de estilo
             loadSessions();
             loadStyleProfiles();
-            loadAnalyzedDocuments();
-            loadSuggestions();
+            updateSuggestions();
+
+            // Cargar sesión por defecto si existe
+            if (sessions[currentSessionId]) {
+                loadSession(currentSessionId);
+            }
+
+            // Reintentar mensajes en cola si hay conexión
+            if (offlineQueue.length && navigator.onLine) {
+                offlineQueue.forEach(prompt => {
+                    promptInput.value = prompt;
+                    sendMessage();
+                });
+            }
+        });
+
+        // Detectar cambios de conexión
+        window.addEventListener('online', () => {
+            if (offlineQueue.length) {
+                offlineQueue.forEach(prompt => {
+                    promptInput.value = prompt;
+                    sendMessage();
+                });
+            }
+        });
+
+        window.addEventListener('offline', () => {
+            showToast('Sin conexión. Los mensajes se guardarán para reintentar.', 'error');
         });
     </script>
 </body>
