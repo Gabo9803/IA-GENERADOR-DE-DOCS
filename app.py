@@ -10,6 +10,7 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
 from reportlab.lib import colors
 from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
 from io import BytesIO
 from datetime import datetime
 import re
@@ -18,7 +19,6 @@ import sqlite3
 import bcrypt
 from collections import Counter
 import statistics
-import unicodedata
 
 app = Flask(__name__)
 app.secret_key = os.urandom(24)  # Clave secreta para sesiones
@@ -89,14 +89,6 @@ def init_db():
             tone TEXT,
             margins TEXT,
             structure TEXT,
-            text_color TEXT,
-            background_color TEXT,
-            alignment TEXT,
-            line_spacing REAL,
-            document_purpose TEXT,
-            confidence_scores TEXT,
-            font_styles TEXT,
-            heading_levels INTEGER,
             FOREIGN KEY (user_id) REFERENCES users (id)
         )
     ''')
@@ -133,8 +125,6 @@ def migrate_db():
         cursor.execute('ALTER TABLE style_profiles ADD COLUMN line_spacing REAL DEFAULT 1.33')
         cursor.execute('ALTER TABLE style_profiles ADD COLUMN document_purpose TEXT DEFAULT "general"')
         cursor.execute('ALTER TABLE style_profiles ADD COLUMN confidence_scores TEXT DEFAULT "{}"')
-        cursor.execute('ALTER TABLE style_profiles ADD COLUMN font_styles TEXT DEFAULT "[]"')
-        cursor.execute('ALTER TABLE style_profiles ADD COLUMN heading_levels INTEGER DEFAULT 1')
         current_version = 2
     
     # Actualizar la versión del esquema
@@ -169,13 +159,7 @@ def get_default_style_profile():
         'alignment': 'left',
         'line_spacing': 1.33,
         'document_purpose': 'general',
-        'confidence_scores': {
-            'font_name': 1.0, 'font_size': 1.0, 'tone': 0.8, 'margins': 1.0, 'structure': 0.8,
-            'text_color': 1.0, 'background_color': 1.0, 'alignment': 0.9, 'line_spacing': 0.9,
-            'document_purpose': 0.7, 'font_styles': 0.8, 'heading_levels': 0.8
-        },
-        'font_styles': ['regular'],
-        'heading_levels': 1
+        'confidence_scores': {'font_name': 1.0, 'font_size': 1.0, 'tone': 0.8, 'margins': 1.0, 'structure': 0.8, 'text_color': 1.0, 'background_color': 1.0, 'alignment': 0.9, 'line_spacing': 0.9, 'document_purpose': 0.7}
     }
 
 def parse_markdown_to_reportlab(text, style_profile=None):
@@ -271,246 +255,128 @@ def analyze_document(file):
         'line_spacing': 1.33,
         'document_purpose': 'general',
         'confidence_scores': {
-            'font_name': 0.8, 'font_size': 0.8, 'tone': 0.7, 'margins': 0.8, 'structure': 0.7,
-            'text_color': 0.8, 'background_color': 0.8, 'alignment': 0.7, 'line_spacing': 0.7,
-            'document_purpose': 0.6, 'font_styles': 0.7, 'heading_levels': 0.7
-        },
-        'font_styles': ['regular'],
-        'heading_levels': 1
+            'font_name': 0.8,
+            'font_size': 0.8,
+            'tone': 0.7,
+            'margins': 0.8,
+            'structure': 0.7,
+            'text_color': 0.8,
+            'background_color': 0.8,
+            'alignment': 0.7,
+            'line_spacing': 0.7,
+            'document_purpose': 0.6
+        }
     }
     
     content = ""
-    try:
-        if file.filename.endswith('.pdf'):
-            with pdfplumber.open(file) as pdf:
-                font_names = []
-                font_sizes = []
-                font_styles = []
-                margins = {'top': [], 'bottom': [], 'left': [], 'right': []}
-                text_colors = []
-                alignments = []
-                line_spacings = []
-                structures = set()
-                heading_sizes = []
-                
-                for page in pdf.pages:
-                    # Extraer texto
-                    page_text = page.extract_text() or ""
-                    content += page_text + "\n"
-                    
-                    # Analizar caracteres para fuentes, tamaños, colores y estilos
-                    chars = page.chars
-                    if chars:
-                        raw_fonts = [char.get('fontname', 'Helvetica') for char in chars]
-                        # Limpiar y normalizar nombres de fuente
-                        cleaned_fonts = []
-                        for f in raw_fonts:
-                            # Eliminar prefijos no alfabéticos y normalizar
-                            f_clean = re.sub(r'^[^a-zA-Z]+', '', f).lower()
-                            f_clean = re.sub(r'[-_].*$', '', f_clean)  # Eliminar sufijos de estilo
-                            cleaned_fonts.append(f_clean)
-                            # Detectar estilos (negrita, cursiva)
-                            if 'bold' in f.lower():
-                                font_styles.append('bold')
-                            elif 'italic' in f.lower() or 'oblique' in f.lower():
-                                font_styles.append('italic')
-                            else:
-                                font_styles.append('regular')
-                        
-                        font_names.extend(cleaned_fonts)
-                        font_sizes.extend([round(char.get('size', 12)) for char in chars])
-                        text_colors.extend([char.get('non_stroking_color', (0, 0, 0)) for char in chars])
-                        
-                        # Detectar posibles encabezados basados en tamaño de fuente
-                        char_sizes = [char.get('size', 12) for char in chars]
-                        if char_sizes:
-                            median_size = statistics.median(char_sizes)
-                            heading_sizes.extend([s for s in char_sizes if s > median_size * 1.2])
-                    
-                    # Calcular márgenes
-                    if page.chars:
-                        margins['top'].append(page.bbox[3] - max(c['y1'] for c in page.chars))
-                        margins['bottom'].append(min(c['y0'] for c in page.chars) - page.bbox[1])
-                        margins['left'].append(min(c['x0'] for c in page.chars) - page.bbox[0])
-                        margins['right'].append(page.bbox[2] - max(c['x1'] for c in page.chars))
-                    
-                    # Detectar alineación y espaciado
-                    if page.extract_text():
-                        lines = page.extract_text().split('\n')
-                        for i in range(len(lines)-1):
-                            try:
-                                y0 = page.chars[i]['y0']
-                                y1 = page.chars[i+1]['y0']
-                                spacing = (y0 - y1) / page.chars[i].get('size', 12)
-                                if spacing > 0:
-                                    line_spacings.append(spacing)
-                            except IndexError:
-                                continue
-                        
-                        # Estimar alineación basada en posiciones x
-                        x_positions = [c['x0'] for c in page.chars]
-                        if x_positions:
-                            x_variance = statistics.variance(x_positions) if len(x_positions) > 1 else 0
-                            if x_variance < 10:
-                                alignments.append('justified' if max(x_positions) - min(x_positions) > page.width * 0.8 else 'left')
-                            elif max(x_positions) > page.width * 0.9:
-                                alignments.append('right')
-                            elif abs(max(x_positions) + min(x_positions) - page.width) < page.width * 0.1:
-                                alignments.append('center')
-                    
-                    # Detectar estructuras avanzadas
-                    if page.extract_tables():
-                        structures.add('tables')
-                    if page_text:
-                        # Listas
-                        if re.search(r'^\s*([-*]|\d+\.)\s+', page_text, re.MULTILINE):
-                            structures.add('lists')
-                        # Encabezados
-                        if re.search(r'^(#{1,3})\s+', page_text, re.MULTILINE):
-                            structures.add('headings')
-                        # Párrafos
-                        if re.search(r'\n\n+', page_text):
-                            structures.add('paragraphs')
-                        # Notas al pie
-                        if re.search(r'^\[\d+\]\s+', page_text, re.MULTILINE):
-                            structures.add('footnotes')
-                        # Citas
-                        if re.search(r'^\s*>\s+', page_text, re.MULTILINE):
-                            structures.add('quotes')
-                
-                # Normalizar y calcular valores dominantes
-                if font_names:
-                    font_counter = Counter(font_names)
-                    raw_font = font_counter.most_common(1)[0][0]
-                    print(f"Fuente detectada: {raw_font}")  # Depuración
-                    
-                    # Mapeo de fuentes a las soportadas por ReportLab
-                    font_mapping = {
-                        'timesnewroman': 'Times-Roman',
-                        'times new roman': 'Times-Roman',
-                        'times': 'Times-Roman',
-                        'arial': 'Helvetica',
-                        'arialm': 'Helvetica',
-                        'helvetica': 'Helvetica',
-                        'couriernew': 'Courier',
-                        'courier new': 'Courier',
-                        'courier': 'Courier',
-                        '': 'Helvetica'
-                    }
-                    normalized_font = font_mapping.get(raw_font.lower(), 'Helvetica')
-                    style_profile['font_name'] = normalized_font
-                    style_profile['confidence_scores']['font_name'] = font_counter.most_common(1)[0][1] / len(font_names)
-                    print(f"Fuente normalizada: {style_profile['font_name']}")  # Depuración
-                
-                if font_sizes:
-                    size_counter = Counter(font_sizes)
-                    style_profile['font_size'] = size_counter.most_common(1)[0][0]
-                    style_profile['confidence_scores']['font_size'] = size_counter.most_common(1)[0][1] / len(font_sizes)
-                    # Validar font_size
-                    style_profile['font_size'] = max(6, min(24, style_profile['font_size']))
-                
-                if font_styles:
-                    style_counter = Counter(font_styles)
-                    style_profile['font_styles'] = list(set(style_counter.keys()))
-                    style_profile['confidence_scores']['font_styles'] = style_counter.most_common(1)[0][1] / len(font_styles)
-                
-                if margins['top']:
-                    for key in margins:
-                        style_profile['margins'][key] = statistics.mean(margins[key]) / 72  # Convertir a pulgadas
-                        style_profile['confidence_scores']['margins'] = min(1.0, len(margins[key]) / len(pdf.pages))
-                
-                if text_colors:
-                    color_counter = Counter([tuple(c) if isinstance(c, (list, tuple)) else c for c in text_colors])
-                    dominant_color = color_counter.most_common(1)[0][0]
-                    if isinstance(dominant_color, (list, tuple)):
-                        style_profile['text_color'] = '#{:02x}{:02x}{:02x}'.format(
-                            int(dominant_color[0] * 255), int(dominant_color[1] * 255), int(dominant_color[2] * 255)
-                        )
-                    style_profile['confidence_scores']['text_color'] = color_counter.most_common(1)[0][1] / len(text_colors)
-                
-                if alignments:
-                    alignment_counter = Counter(alignments)
-                    style_profile['alignment'] = alignment_counter.most_common(1)[0][0]
-                    style_profile['confidence_scores']['alignment'] = alignment_counter.most_common(1)[0][1] / len(alignments)
-                
-                if line_spacings:
-                    style_profile['line_spacing'] = min(max(statistics.mean(line_spacings), 1.0), 3.0)
-                    style_profile['confidence_scores']['line_spacing'] = len(line_spacings) / len(pdf.pages)
-                
-                if heading_sizes:
-                    # Estimar niveles de encabezado basados en tamaños de fuente
-                    unique_sizes = sorted(set(heading_sizes), reverse=True)
-                    style_profile['heading_levels'] = min(len(unique_sizes), 3)  # Máximo 3 niveles
-                    style_profile['confidence_scores']['heading_levels'] = len(heading_sizes) / len(font_sizes)
-                
-                style_profile['structure'] = list(structures)
-                style_profile['confidence_scores']['structure'] = 0.9 if structures else 0.7
-                
-                # Asumir fondo blanco
-                style_profile['background_color'] = '#FFFFFF'
-                style_profile['confidence_scores']['background_color'] = 0.9
-                
-                print(f"Estructuras detectadas: {style_profile['structure']}")  # Depuración
-                print(f"Estilos de fuente detectados: {style_profile['font_styles']}")  # Depuración
-                print(f"Niveles de encabezado: {style_profile['heading_levels']}")  # Depuración
-        
-        elif file.filename.endswith('.txt'):
-            try:
-                content = file.read().decode('utf-8', errors='ignore')
-            except UnicodeDecodeError:
-                content = file.read().decode('latin-1', errors='ignore')
-                print("Codificación no UTF-8 detectada, usando latin-1 como respaldo")  # Depuración
-            
-            structures = set()
+    if file.filename.endswith('.pdf'):
+        with pdfplumber.open(file) as pdf:
+            font_names = []
+            font_sizes = []
+            margins = {'top': [], 'bottom': [], 'left': [], 'right': []}
+            text_colors = []
             alignments = []
             line_spacings = []
+            structures = set()
             
-            # Normalizar texto para análisis
-            content = unicodedata.normalize('NFKD', content)
-            lines = content.split('\n')
-            
-            # Estimar alineación basada en sangría
-            indentations = [len(line) - len(line.lstrip()) for line in lines if line.strip()]
-            if indentations:
-                indent_variance = statistics.variance(indentations) if len(indentations) > 1 else 0
-                if indent_variance < 2:
-                    alignments.append('left')
-                elif any(indent > 10 for indent in indentations):
-                    alignments.append('justified')
-            
-            # Estimar espaciado entre líneas basado en líneas vacías
-            empty_line_count = sum(1 for line in lines if not line.strip())
-            if empty_line_count > len(lines) * 0.1:
-                line_spacings.append(1.5)  # Estimar espaciado mayor
-            else:
-                line_spacings.append(1.2)
-            
-            # Detectar estructuras avanzadas
-            for i, line in enumerate(lines):
-                line = line.strip()
-                if not line:
-                    continue
-                # Listas
-                if re.match(r'^([-*]|\d+\.)\s+', line):
-                    structures.add('lists')
-                # Encabezados
-                if re.match(r'^[A-Z].*\n[-=]+$', content, re.MULTILINE) or re.match(r'^#{1,3}\s+', line):
-                    structures.add('headings')
-                # Párrafos
-                if len(line) > 50 and not re.match(r'^[-*]|\d+\.', line):
-                    structures.add('paragraphs')
-                # Tablas
-                if re.match(r'^\|.*\|\s*$', line):
+            for page in pdf.pages:
+                # Extraer texto
+                content += page.extract_text() or ""
+                
+                # Analizar caracteres para fuentes, tamaños y colores
+                chars = page.chars
+                if chars:
+                    raw_fonts = [char.get('fontname', 'Helvetica').split('-')[0] for char in chars]
+                    # Limpiar nombres de fuente malformados
+                    cleaned_fonts = [re.sub(r'^[^a-zA-Z]+', '', f).lower() for f in raw_fonts]
+                    font_names.extend(cleaned_fonts)
+                    font_sizes.extend([round(char.get('size', 12)) for char in chars])
+                    text_colors.extend([char.get('non_stroking_color', (0, 0, 0)) for char in chars])
+                
+                # Calcular márgenes
+                if page.chars:
+                    margins['top'].append(page.bbox[3] - max(c['y1'] for c in page.chars))
+                    margins['bottom'].append(min(c['y0'] for c in page.chars) - page.bbox[1])
+                    margins['left'].append(min(c['x0'] for c in page.chars) - page.bbox[0])
+                    margins['right'].append(page.bbox[2] - max(c['x1'] for c in page.chars))
+                
+                # Detectar alineación y espaciado
+                if page.extract_text():
+                    lines = page.extract_text().split('\n')
+                    for i in range(len(lines)-1):
+                        try:
+                            y0 = page.chars[i]['y0']
+                            y1 = page.chars[i+1]['y0']
+                            spacing = (y0 - y1) / page.chars[i].get('size', 12)
+                            if spacing > 0:
+                                line_spacings.append(spacing)
+                        except IndexError:
+                            continue
+                    
+                    # Estimar alineación basada en posiciones x
+                    x_positions = [c['x0'] for c in page.chars]
+                    if x_positions:
+                        x_variance = statistics.variance(x_positions) if len(x_positions) > 1 else 0
+                        if x_variance < 10:
+                            alignments.append('justified' if max(x_positions) - min(x_positions) > page.width * 0.8 else 'left')
+                        elif max(x_positions) > page.width * 0.9:
+                            alignments.append('right')
+                        elif abs(max(x_positions) + min(x_positions) - page.width) < page.width * 0.1:
+                            alignments.append('center')
+                
+                # Detectar estructuras
+                if page.extract_tables():
                     structures.add('tables')
-                # Citas
-                if line.startswith('>'):
-                    structures.add('quotes')
-                # Bloques de código
-                if re.match(r'^```|^    ', line):
-                    structures.add('code')
+                if page.extract_text():
+                    text = page.extract_text()
+                    if re.search(r'^\s*[-*]\s+', text, re.MULTILINE):
+                        structures.add('lists')
+                    if re.search(r'^(#+)\s+', text, re.MULTILINE):
+                        structures.add('headings')
+                    if re.search(r'\n\n+', text):
+                        structures.add('paragraphs')
             
-            style_profile['structure'] = list(structures)
-            style_profile['confidence_scores']['structure'] = 0.8 if structures else 0.6
+            # Normalizar y calcular valores dominantes
+            if font_names:
+                font_counter = Counter(font_names)
+                raw_font = font_counter.most_common(1)[0][0]
+                print(f"Fuente detectada: {raw_font}")  # Depuración
+                
+                # Mapeo de fuentes a las soportadas por ReportLab
+                font_mapping = {
+                    'timesnewroman': 'Times-Roman',
+                    'times new roman': 'Times-Roman',
+                    'arial': 'Helvetica',
+                    'arialm': 'Helvetica',  # Manejar 'arialm' específicamente
+                    'helvetica': 'Helvetica',
+                    'couriernew': 'Courier',
+                    'courier new': 'Courier',
+                    '': 'Helvetica'  # Manejar nombres vacíos o malformados
+                }
+                # Normalizar el nombre de la fuente
+                normalized_font = font_mapping.get(raw_font.lower(), 'Helvetica')
+                style_profile['font_name'] = normalized_font
+                style_profile['confidence_scores']['font_name'] = font_counter.most_common(1)[0][1] / len(font_names)
+                print(f"Fuente normalizada: {style_profile['font_name']}")  # Depuración
+            
+            if font_sizes:
+                size_counter = Counter(font_sizes)
+                style_profile['font_size'] = size_counter.most_common(1)[0][0]
+                style_profile['confidence_scores']['font_size'] = size_counter.most_common(1)[0][1] / len(font_sizes)
+            
+            if margins['top']:
+                for key in margins:
+                    style_profile['margins'][key] = statistics.mean(margins[key]) / 72  # Convertir a pulgadas
+                    style_profile['confidence_scores']['margins'] = min(1.0, len(margins[key]) / len(pdf.pages))
+            
+            if text_colors:
+                color_counter = Counter([tuple(c) if isinstance(c, (list, tuple)) else c for c in text_colors])
+                dominant_color = color_counter.most_common(1)[0][0]
+                if isinstance(dominant_color, (list, tuple)):
+                    style_profile['text_color'] = '#{:02x}{:02x}{:02x}'.format(
+                        int(dominant_color[0] * 255), int(dominant_color[1] * 255), int(dominant_color[2] * 255)
+                    )
+                style_profile['confidence_scores']['text_color'] = color_counter.most_common(1)[0][1] / len(text_colors)
             
             if alignments:
                 alignment_counter = Counter(alignments)
@@ -518,58 +384,62 @@ def analyze_document(file):
                 style_profile['confidence_scores']['alignment'] = alignment_counter.most_common(1)[0][1] / len(alignments)
             
             if line_spacings:
-                style_profile['line_spacing'] = min(max(statistics.mean(line_spacings), 1.0), 3.0)
-                style_profile['confidence_scores']['line_spacing'] = 0.7
+                style_profile['line_spacing'] = min(max(statistics.mean(line_spacings), 1.0), 2.0)
+                style_profile['confidence_scores']['line_spacing'] = len(line_spacings) / len(pdf.pages)
             
-            print(f"Estructuras detectadas en TXT: {style_profile['structure']}")  # Depuración
-        
-        # Analizar tono y propósito con OpenAI
-        if content:
-            # Extraer palabras clave para mejorar el análisis
-            words = re.findall(r'\b\w+\b', content.lower())
-            word_counter = Counter(words)
-            keywords = [word for word, count in word_counter.most_common(20) if len(word) > 3]
-            print(f"Palabras clave extraídas: {keywords}")  # Depuración
+            style_profile['structure'] = list(structures)
+            style_profile['confidence_scores']['structure'] = 0.9 if structures else 0.7
             
-            try:
-                response = client.chat.completions.create(
-                    model="gpt-4o-mini",
-                    messages=[
-                        {
-                            "role": "system",
-                            "content": """
-                            Analiza el texto proporcionado y las palabras clave para devolver un JSON con:
-                            - 'tone': tono del texto (e.g., formal, informal, técnico, académico, persuasivo, instructivo, analítico, narrativo, descriptivo).
-                            - 'document_purpose': propósito del documento (e.g., informe, carta, manual, artículo, presentación, guía, propuesta, resumen).
-                            - 'confidence': confianza en la predicción (0.0 a 1.0).
-                            Usa el contexto, vocabulario y palabras clave para determinar el tono y propósito con alta precisión.
-                            """
-                        },
-                        {
-                            "role": "user",
-                            "content": f"Texto: {content[:4000]}\nPalabras clave: {', '.join(keywords)}"
-                        }
-                    ],
-                    max_tokens=500
-                )
-                analysis = json.loads(response.choices[0].message.content)
-                style_profile['tone'] = analysis.get('tone', 'neutral')
-                style_profile['document_purpose'] = analysis.get('document_purpose', 'general')
-                style_profile['confidence_scores']['tone'] = analysis.get('confidence', 0.7)
-                style_profile['confidence_scores']['document_purpose'] = analysis.get('confidence', 0.7)
-                print(f"Análisis de tono: {style_profile['tone']}, propósito: {style_profile['document_purpose']}")  # Depuración
-            except Exception as e:
-                print(f"Error en análisis de tono: {e}")
-                style_profile['tone'] = 'neutral'
-                style_profile['document_purpose'] = 'general'
-                style_profile['confidence_scores']['tone'] = 0.5
-                style_profile['confidence_scores']['document_purpose'] = 0.5
+            # Asumir fondo blanco (PDFs no siempre proporcionan esta información)
+            style_profile['background_color'] = '#FFFFFF'
+            style_profile['confidence_scores']['background_color'] = 0.9
         
-        return style_profile, content
+    elif file.filename.endswith('.txt'):
+        content = file.read().decode('utf-8', errors='ignore')
+        structures = set()
+        
+        # Detectar estructuras en TXT
+        if re.search(r'^\s*[-*]\s+', content, re.MULTILINE):
+            structures.add('lists')
+        if re.search(r'^\s*[A-Z].*\n[-=]+', content, re.MULTILINE):
+            structures.add('headings')
+        if re.search(r'\n\n+', content):
+            structures.add('paragraphs')
+        if re.search(r'^\s*\|.*\|\s*$', content, re.MULTILINE):
+            structures.add('tables')
+        
+        style_profile['structure'] = list(structures)
+        style_profile['confidence_scores']['structure'] = 0.8 if structures else 0.6
     
-    except Exception as e:
-        print(f"Error al analizar el documento: {e}")
-        return style_profile, content
+    # Analizar tono y propósito con OpenAI
+    if content:
+        try:
+            response = client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": """
+                        Analiza el texto proporcionado y devuelve un JSON con:
+                        - 'tone': tono del texto (e.g., formal, informal, técnico, académico, persuasivo, narrativo).
+                        - 'document_purpose': propósito del documento (e.g., informe, carta, manual, artículo, presentación).
+                        - 'confidence': confianza en la predicción (0.0 a 1.0).
+                        Usa el contexto y vocabulario para determinar el tono y propósito.
+                        """
+                    },
+                    {"role": "user", "content": content[:4000]}
+                ],
+                max_tokens=500
+            )
+            analysis = json.loads(response.choices[0].message.content)
+            style_profile['tone'] = analysis.get('tone', 'neutral')
+            style_profile['document_purpose'] = analysis.get('document_purpose', 'general')
+            style_profile['confidence_scores']['tone'] = analysis.get('confidence', 0.7)
+            style_profile['confidence_scores']['document_purpose'] = analysis.get('confidence', 0.7)
+        except Exception as e:
+            print(f"Error en análisis de tono: {e}")
+    
+    return style_profile, content
 
 @app.route('/')
 @login_required
@@ -662,7 +532,7 @@ def generate_document():
         # Usar el tono y la estructura del style_profile si están disponibles
         effective_tone = style_profile['tone'] if style_profile.get('tone') else tone
         structure = style_profile['structure'] if style_profile.get('structure') else ['paragraphs']
-        structure_instruction = f"Usa una estructura que incluya: {', '.join(structure)} (e.g., headings, lists, paragraphs, tables, quotes, footnotes)."
+        structure_instruction = f"Usa una estructura que incluya: {', '.join(structure)} (e.g., headings, lists, paragraphs)."
 
         # Detectar si el prompt requiere una explicación estructurada
         is_explanatory = re.search(r'^(¿Quién es|¿Qué es|explicar|detallar)\b', prompt, re.IGNORECASE) is not None
@@ -674,7 +544,7 @@ def generate_document():
             system_prompt = f"""
             Eres GarBotGPT, un asistente que genera documentos profesionales en formato Markdown con una estructura clara para explicaciones.
             - Tipo de documento: {doc_type} (e.g., explicación, biografía, informe).
-            - Tono: {effective_tone} (formal, informal, técnico, académico, persuasivo, instructivo, analítico, narrativo, descriptivo).
+            - Tono: {effective_tone} (formal, informal, técnico).
             - Longitud: {length} (corto: ~100 palabras, medio: ~300 palabras, largo: ~600 palabras).
             - Idioma: {language} (e.g., es para español, en para inglés, fr para francés).
             - {structure_instruction}
@@ -696,14 +566,14 @@ def generate_document():
               ## Conclusión
               [Resumen de la relevancia o importancia del tema.]
               ```
-            - Usa encabezados (#, ##, ###), listas (-), negritas (**), tablas (|...|), citas (>), y notas al pie ([1]) cuando sea apropiado.
+            - Usa encabezados (#, ##), listas (-), negritas (**), y tablas (|...|) cuando sea apropiado.
             - Considera el contexto de los mensajes anteriores para mantener coherencia en la conversación.
             """
         elif is_html:
             system_prompt = f"""
             Eres GarBotGPT, un asistente que genera páginas web en formato HTML con CSS y JavaScript si es necesario.
             - Tipo de documento: página web (HTML).
-            - Tono: {effective_tone} (formal, informal, técnico, académico, persuasivo, instructivo, analítico, narrativo, descriptivo).
+            - Tono: {effective_tone} (formal, informal, técnico).
             - Longitud: {length} (corto: ~100 líneas, medio: ~300 líneas, largo: ~600 líneas).
             - Idioma: {language} (e.g., es para español, en para inglés, fr para francés).
             - Genera código HTML completo con:
@@ -716,12 +586,12 @@ def generate_document():
         else:
             system_prompt = f"""
             Eres GarBotGPT, un asistente que genera documentos profesionales en formato Markdown.
-            - Tipo de documento: {doc_type} (e.g., carta formal, informe, correo, contrato, currículum, guía, propuesta).
-            - Tono: {effective_tone} (formal, informal, técnico, académico, persuasivo, instructivo, analítico, narrativo, descriptivo).
+            - Tipo de documento: {doc_type} (e.g., carta formal, informe, correo, contrato, currículum).
+            - Tono: {effective_tone} (formal, informal, técnico).
             - Longitud: {length} (corto: ~100 palabras, medio: ~300 palabras, largo: ~600 palabras).
             - Idioma: {language} (e.g., es para español, en para inglés, fr para francés).
             - {structure_instruction}
-            - Usa encabezados (#, ##, ###), listas (-), negritas (**), tablas (|...|), citas (>), y notas al pie ([1]) cuando sea apropiado.
+            - Usa encabezados (#, ##), listas (-), negritas (**), y tablas (|...|) cuando sea apropiado.
             - Considera el contexto de los mensajes anteriores para mantener coherencia en la conversación.
             """
 
@@ -730,7 +600,7 @@ def generate_document():
         messages.append({"role": "user", "content": prompt})
 
         response = client.chat.completions.create(
-            model="gpt-3.5-turbo",  # Nota: Cambiar a "gpt-4o-mini" si está disponible
+            model="gpt-3.5-turbo",
             messages=messages,
             max_tokens=1000,
             temperature=0.7
@@ -774,9 +644,7 @@ def get_style_profile(profile_id):
             'alignment': profile['alignment'],
             'line_spacing': profile['line_spacing'],
             'document_purpose': profile['document_purpose'],
-            'confidence_scores': json.loads(profile['confidence_scores']),
-            'font_styles': json.loads(profile['font_styles']),
-            'heading_levels': profile['heading_levels']
+            'confidence_scores': json.loads(profile['confidence_scores'])
         }
     return get_default_style_profile()
 
@@ -857,9 +725,8 @@ def analyze_document_endpoint():
         cursor.execute('''
             INSERT INTO style_profiles (
                 user_id, font_name, font_size, tone, margins, structure, 
-                text_color, background_color, alignment, line_spacing, 
-                document_purpose, confidence_scores, font_styles, heading_levels
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                text_color, background_color, alignment, line_spacing, document_purpose, confidence_scores
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             current_user.id,
             style_profile['font_name'],
@@ -872,9 +739,7 @@ def analyze_document_endpoint():
             style_profile['alignment'],
             style_profile['line_spacing'],
             style_profile['document_purpose'],
-            json.dumps(style_profile['confidence_scores']),
-            json.dumps(style_profile['font_styles']),
-            style_profile['heading_levels']
+            json.dumps(style_profile['confidence_scores'])
         ))
         profile_id = cursor.lastrowid
         conn.commit()
@@ -910,9 +775,7 @@ def get_style_profiles():
             'alignment': profile['alignment'],
             'line_spacing': profile['line_spacing'],
             'document_purpose': profile['document_purpose'],
-            'confidence_scores': json.loads(profile['confidence_scores']),
-            'font_styles': json.loads(profile['font_styles']),
-            'heading_levels': profile['heading_levels']
+            'confidence_scores': json.loads(profile['confidence_scores'])
         }
     
     return jsonify(result)
