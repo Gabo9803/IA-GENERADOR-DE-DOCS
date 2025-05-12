@@ -19,11 +19,11 @@ import sqlite3
 import bcrypt
 from collections import Counter
 import statistics
-import markdown
+import hashlib
+import markdown2
 from docx import Document
 import pytesseract
 from PIL import Image
-import hashlib
 
 app = Flask(__name__)
 app.secret_key = os.urandom(24)
@@ -63,7 +63,6 @@ def load_user(user_id):
 CURRENT_SCHEMA_VERSION = 3
 
 def init_db():
-    """Inicializa la base de datos."""
     conn = sqlite3.connect('profiles.db')
     cursor = conn.cursor()
     
@@ -94,13 +93,13 @@ def init_db():
             structure TEXT,
             text_color TEXT,
             background_color TEXT,
+            secondary_colors TEXT,
             alignment TEXT,
             line_spacing REAL,
             document_purpose TEXT,
             confidence_scores TEXT,
             analysis_keywords TEXT,
-            embeddings TEXT,
-            visual_elements TEXT,
+            embedding TEXT,
             FOREIGN KEY (user_id) REFERENCES users (id)
         )
     ''')
@@ -109,17 +108,12 @@ def init_db():
     conn.close()
 
 def migrate_db():
-    """Migra la base de datos a la versión actual."""
     conn = sqlite3.connect('profiles.db')
     cursor = conn.cursor()
     
     cursor.execute('SELECT version FROM schema_version WHERE id = 1')
     result = cursor.fetchone()
     current_version = result[0] if result else 0
-    
-    if not result:
-        cursor.execute('INSERT INTO schema_version (id, version) VALUES (1, ?)', (current_version,))
-        conn.commit()
     
     if current_version < 1:
         current_version = 1
@@ -136,13 +130,13 @@ def migrate_db():
     if current_version < 3:
         cursor.execute('ALTER TABLE style_profiles ADD COLUMN name TEXT DEFAULT ""')
         cursor.execute('ALTER TABLE style_profiles ADD COLUMN fonts TEXT DEFAULT "{}"')
+        cursor.execute('ALTER TABLE style_profiles ADD COLUMN secondary_colors TEXT DEFAULT "[]"')
         cursor.execute('ALTER TABLE style_profiles ADD COLUMN analysis_keywords TEXT DEFAULT "[]"')
-        cursor.execute('ALTER TABLE style_profiles ADD COLUMN embeddings TEXT DEFAULT "[]"')
-        cursor.execute('ALTER TABLE style_profiles ADD COLUMN visual_elements TEXT DEFAULT "{}"')
+        cursor.execute('ALTER TABLE style_profiles ADD COLUMN embedding TEXT DEFAULT "[]"')
         cursor.execute('UPDATE style_profiles SET fonts = ?', (json.dumps({'normal': 'Helvetica', 'bold': 'Helvetica-Bold', 'italic': 'Helvetica-Oblique'}),))
         current_version = 3
     
-    cursor.execute('UPDATE schema_version SET version = ? WHERE id = 1', (CURRENT_SCHEMA_VERSION,))
+    cursor.execute('INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, ?)', (CURRENT_SCHEMA_VERSION,))
     conn.commit()
     conn.close()
 
@@ -161,7 +155,6 @@ def get_db_connection():
     return conn
 
 def get_default_style_profile():
-    """Devuelve un estilo por defecto."""
     return {
         'name': 'Default',
         'fonts': {'normal': 'Helvetica', 'bold': 'Helvetica-Bold', 'italic': 'Helvetica-Oblique'},
@@ -171,17 +164,16 @@ def get_default_style_profile():
         'structure': ['paragraphs'],
         'text_color': '#000000',
         'background_color': '#FFFFFF',
+        'secondary_colors': [],
         'alignment': 'left',
         'line_spacing': 1.33,
         'document_purpose': 'general',
-        'confidence_scores': {'fonts': 1.0, 'font_size': 1.0, 'tone': 0.8, 'margins': 1.0, 'structure': 0.8, 'text_color': 1.0, 'background_color': 1.0, 'alignment': 0.9, 'line_spacing': 0.9, 'document_purpose': 0.7},
+        'confidence_scores': {'font_size': 1.0, 'tone': 0.8, 'margins': 1.0, 'structure': 0.8, 'text_color': 1.0, 'background_color': 1.0, 'alignment': 0.9, 'line_spacing': 0.9, 'document_purpose': 0.7},
         'analysis_keywords': [],
-        'embeddings': [],
-        'visual_elements': {}
+        'embedding': []
     }
 
 def parse_markdown_to_reportlab(text, style_profile=None):
-    """Convierte Markdown a elementos de reportlab con soporte para estilos personalizados."""
     styles = getSampleStyleSheet()
     style_profile = style_profile or get_default_style_profile()
     fonts = style_profile['fonts']
@@ -191,14 +183,13 @@ def parse_markdown_to_reportlab(text, style_profile=None):
     text_color = colors.HexColor(style_profile['text_color'])
     background_color = colors.HexColor(style_profile['background_color'])
     
-    # Validar fuentes
     available_fonts = pdfmetrics.getRegisteredFontNames()
     font_normal = fonts.get('normal', 'Helvetica')
     font_bold = fonts.get('bold', 'Helvetica-Bold')
     font_italic = fonts.get('italic', 'Helvetica-Oblique')
     
     if font_normal not in available_fonts:
-        print(f"Fuente normal no válida '{font_normal}', usando 'Helvetica'")
+        print(f"Fuente no válida '{font_normal}', usando 'Helvetica'")
         font_normal = 'Helvetica'
     if font_bold not in available_fonts:
         print(f"Fuente negrita no válida '{font_bold}', usando 'Helvetica-Bold'")
@@ -239,12 +230,11 @@ def parse_markdown_to_reportlab(text, style_profile=None):
     )
     elements = []
 
-    # Soporte para tablas Markdown
     table_pattern = re.compile(r'\|(.+?)\|\n\|[-|:\s]+\|\n((?:\|.+?\|(?:\n|$))+)')
     text_parts = table_pattern.split(text)
     
     for i, part in enumerate(text_parts):
-        if i % 3 == 2:  # Contenido de la tabla
+        if i % 3 == 2:
             rows = [row.strip().split('|')[1:-1] for row in part.strip().split('\n')]
             table_data = [[cell.strip() for cell in row] for row in rows]
             table = Table(table_data)
@@ -261,7 +251,7 @@ def parse_markdown_to_reportlab(text, style_profile=None):
             ]))
             elements.append(table)
             elements.append(Spacer(1, 0.2 * inch))
-        elif i % 3 != 1:  # Texto normal
+        elif i % 3 != 1:
             lines = part.split('\n')
             for line in lines:
                 line = line.replace('\n', '<br />')
@@ -271,16 +261,15 @@ def parse_markdown_to_reportlab(text, style_profile=None):
                     line = f'• {line[2:]}'
                     elements.append(Paragraph(line, body_style))
                 else:
-                    style = bold_style if '<b>' in line else italic_style if '<i>' in line else body_style
+                    style = bold_style if '**' in line else italic_style if '*' in line else body_style
                     elements.append(Paragraph(line, style))
                 elements.append(Spacer(1, 0.1 * inch))
     
     return elements
 
-def analyze_document(file):
-    """Analiza un documento subido para extraer estilo, formato y tipografía con mayor precisión."""
+def analyze_document(file, custom_profile_name=None):
     style_profile = {
-        'name': f"Perfil - {datetime.now().strftime('%Y%m%d_%H%M%S')}",
+        'name': custom_profile_name or f"Perfil-{datetime.now().strftime('%Y%m%d')}",
         'fonts': {'normal': 'Helvetica', 'bold': 'Helvetica-Bold', 'italic': 'Helvetica-Oblique'},
         'font_size': 12,
         'tone': 'neutral',
@@ -288,11 +277,11 @@ def analyze_document(file):
         'structure': [],
         'text_color': '#000000',
         'background_color': '#FFFFFF',
+        'secondary_colors': [],
         'alignment': 'left',
         'line_spacing': 1.33,
         'document_purpose': 'general',
         'confidence_scores': {
-            'fonts': 0.8,
             'font_size': 0.8,
             'tone': 0.7,
             'margins': 0.8,
@@ -304,18 +293,26 @@ def analyze_document(file):
             'document_purpose': 0.6
         },
         'analysis_keywords': [],
-        'embeddings': [],
-        'visual_elements': {}
+        'embedding': []
     }
     
     content = ""
+    summary = {
+        'content_preview': '',
+        'word_count': 0,
+        'page_count': 1,
+        'detected_structures': [],
+        'visual_elements': {'images': 0, 'tables': 0},
+        'tone_analysis': {'tone': 'neutral', 'confidence': 0.5},
+        'purpose_analysis': {'purpose': 'general', 'confidence': 0.5}
+    }
+    
     try:
-        # Calcular hash del archivo para caché
-        file.seek(0)
         file_hash = hashlib.md5(file.read()).hexdigest()
         file.seek(0)
         if file_hash in analysis_cache:
-            return analysis_cache[file_hash]
+            style_profile, content, summary = analysis_cache[file_hash]
+            return style_profile, content, summary
         
         if file.filename.endswith('.pdf'):
             with pdfplumber.open(file) as pdf:
@@ -329,26 +326,29 @@ def analyze_document(file):
                 line_spacings = []
                 structures = set()
                 heading_levels = []
-                visual_elements = {'images': 0, 'tables': 0}
+                image_count = 0
                 
                 max_pages = 5
                 for page in pdf.pages[:min(len(pdf.pages), max_pages)]:
-                    # Extraer texto
                     content += page.extract_text() or ""
                     
-                    # Analizar fuentes incrustadas
+                    # Detectar imágenes
+                    image_count += len(page.images)
+                    
+                    # Extraer fuentes incrustadas
                     for font in page.fonts:
                         font_name = font.get('BaseFont', 'Helvetica').split('-')[0]
-                        cleaned_name = re.sub(r'^[^a-zA-Z]+', '', font_name).lower()
+                        font_name = re.sub(r'^[^a-zA-Z]+', '', font_name).lower()
                         if font.get('FontFile'):
                             try:
                                 font_data = font['FontFile'].stream
-                                pdfmetrics.registerFont(TTFont(cleaned_name, BytesIO(font_data)))
-                                print(f"Registrada fuente personalizada: {cleaned_name}")
+                                pdfmetrics.registerFont(TTFont(font_name, BytesIO(font_data)))
+                                print(f"Fuente personalizada registrada: {font_name}")
                             except Exception as e:
-                                print(f"Error al registrar fuente {cleaned_name}: {e}")
-                        font_names.append(cleaned_name)
-                        font_styles.append(font.get('BaseFont', ''))
+                                print(f"Error al registrar fuente: {e}")
+                        
+                        font_names.append(font_name)
+                        font_styles.append(font.get('BaseFont', font_name))
                     
                     # Analizar caracteres
                     chars = page.chars
@@ -392,7 +392,7 @@ def analyze_document(file):
                             elif abs(max(x_positions) + min(x_positions) - page.width) < page.width * 0.1:
                                 alignments.append('center')
                     
-                    # Detectar estructuras avanzadas
+                    # Detectar estructuras
                     avg_size = statistics.mean(font_sizes) if font_sizes else 12
                     for char in page.chars:
                         size = char.get('size', 12)
@@ -400,12 +400,12 @@ def analyze_document(file):
                             heading_levels.append({'size': size, 'text': char['text']})
                     if page.extract_tables():
                         structures.add('tables')
-                        visual_elements['tables'] += len(page.extract_tables())
+                        summary['visual_elements']['tables'] += 1
                     if page.extract_text():
                         text = page.extract_text()
                         if re.search(r'^\s*[\•\-\*]\s+', text, re.MULTILINE):
                             structures.add('lists')
-                        if re.search(r'^\s*[A-Z].*\n[-=]+', text, re.MULTILINE):
+                        if re.search(r'^(#+)\s+', text, re.MULTILINE) or any(size > avg_size * 1.5 for size in font_sizes):
                             structures.add('headings')
                         if re.search(r'\n\n+', text):
                             structures.add('paragraphs')
@@ -413,10 +413,8 @@ def analyze_document(file):
                             structures.add('blockquotes')
                         if any(re.match(r'^\d+\.\s+', line) for line in text.split('\n')[-5:]):
                             structures.add('footnotes')
-                    if page.images:
-                        visual_elements['images'] += len(page.images)
                 
-                # Normalizar valores
+                # Normalizar fuentes
                 if font_names:
                     font_counter = Counter(font_names)
                     raw_font = font_counter.most_common(1)[0][0]
@@ -432,19 +430,19 @@ def analyze_document(file):
                         '': 'Helvetica'
                     }
                     style_profile['fonts']['normal'] = font_mapping.get(raw_font.lower(), 'Helvetica')
-                    # Detectar variaciones
+                    style_profile['confidence_scores']['font_size'] = font_counter.most_common(1)[0][1] / len(font_names)
+                    
+                    # Analizar variaciones
                     for style in font_styles:
                         if 'Bold' in style:
-                            style_profile['fonts']['bold'] = font_mapping.get(raw_font.lower(), 'Helvetica') + '-Bold'
+                            style_profile['fonts']['bold'] = style_profile['fonts']['normal'] + '-Bold'
                         if 'Italic' in style or 'Oblique' in style:
-                            style_profile['fonts']['italic'] = font_mapping.get(raw_font.lower(), 'Helvetica') + '-Oblique'
-                    style_profile['confidence_scores']['fonts'] = font_counter.most_common(1)[0][1] / len(font_names)
-                    print(f"Fuentes normalizadas: {style_profile['fonts']}")
+                            style_profile['fonts']['italic'] = style_profile['fonts']['normal'] + '-Oblique'
                 
                 if not font_names:
                     style_profile['fonts'] = {'normal': 'Helvetica', 'bold': 'Helvetica-Bold', 'italic': 'Helvetica-Oblique'}
-                    style_profile['confidence_scores']['fonts'] = 0.5
-                    print("No se detectaron fuentes, usando fuentes por defecto")
+                    style_profile['confidence_scores']['font_size'] = 0.5
+                    print("No se detectaron fuentes, usando 'Helvetica'")
                 
                 if font_sizes:
                     size_counter = Counter(font_sizes)
@@ -464,15 +462,16 @@ def analyze_document(file):
                         style_profile['text_color'] = '#{:02x}{:02x}{:02x}'.format(
                             int(dominant_color[0] * 255), int(dominant_color[1] * 255), int(dominant_color[2] * 255)
                         )
+                    style_profile['secondary_colors'] = [
+                        '#{:02x}{:02x}{:02x}'.format(int(c[0] * 255), int(c[1] * 255), int(c[2] * 255))
+                        for c, _ in color_counter.most_common()[1:3]
+                    ]
                     style_profile['confidence_scores']['text_color'] = color_counter.most_common(1)[0][1] / len(text_colors)
                 
                 if background_colors:
-                    bg_counter = Counter(background_colors)
-                    dominant_bg = bg_counter.most_common(1)[0][0]
-                    style_profile['background_color'] = '#{:02x}{:02x}{:02x}'.format(
-                        int(dominant_bg[0] * 255), int(dominant_bg[1] * 255), int(dominant_bg[2] * 255)
-                    )
-                    style_profile['confidence_scores']['background_color'] = bg_counter.most_common(1)[0][1] / len(background_colors)
+                    color_counter = Counter(background_colors)
+                    dominant_bg = color_counter.most_common(1)[0][0]
+                    style_profile['background_color'] = '#{:02x}{:02x}{:02x}'.format(*dominant_bg)
                 
                 if alignments:
                     alignment_counter = Counter(alignments)
@@ -480,67 +479,74 @@ def analyze_document(file):
                     style_profile['confidence_scores']['alignment'] = alignment_counter.most_common(1)[0][1] / len(alignments)
                 
                 if line_spacings:
-                    style_profile['line_spacing'] = min(max(statistics.mean(line_spacings), 1.0), 2.0)
+                    style_profile['line_spacing'] = min(max(statistics.mode(line_spacings), 1.0), 2.0)
                     style_profile['confidence_scores']['line_spacing'] = len(line_spacings) / len(pdf.pages)
                 
-                if heading_levels:
-                    unique_sizes = sorted(set(h['size'] for h in heading_levels), reverse=True)
-                    style_profile['structure'].append({'headings': len(unique_sizes)})
-                
                 style_profile['structure'] = list(structures)
+                style_profile['structure'].append(f"heading_levels:{len(set(h['size'] for h in heading_levels))}")
                 style_profile['confidence_scores']['structure'] = 0.9 if structures else 0.7
-                style_profile['visual_elements'] = visual_elements
+                
+                summary['page_count'] = len(pdf.pages)
+                summary['visual_elements']['images'] = image_count
         
         elif file.filename.endswith('.txt'):
             content = file.read().decode('utf-8', errors='ignore')
-            md = markdown.Markdown()
-            parsed = md.parse(content)
+            file.seek(0)
             structures = set()
-            if any(tag.startswith('h') for tag in parsed):
-                structures.add('headings')
-            if 'ul' in parsed or 'ol' in parsed:
+            md = markdown2.Markdown()
+            parsed = md.convert(content)
+            
+            if '<ul>' in parsed or '<ol>' in parsed:
                 structures.add('lists')
-            if re.search(r'^\s*\|.*\|\s*$', content, re.MULTILINE):
+            if re.search(r'<h[1-6]', parsed):
+                structures.add('headings')
+            if re.search(r'<p>', parsed):
+                structures.add('paragraphs')
+            if re.search(r'<table>', parsed):
                 structures.add('tables')
-            if re.search(r'^>\s+', content, re.MULTILINE):
+            if re.search(r'<blockquote>', parsed):
                 structures.add('blockquotes')
             if '```' in content:
                 style_profile['fonts']['normal'] = 'Courier'
-                style_profile['confidence_scores']['fonts'] = 0.7
+                style_profile['fonts']['bold'] = 'Courier-Bold'
+                style_profile['fonts']['italic'] = 'Courier-Oblique'
+                style_profile['confidence_scores']['font_size'] = 0.7
+            
             style_profile['structure'] = list(structures)
             style_profile['confidence_scores']['structure'] = 0.8 if structures else 0.6
         
         elif file.filename.endswith('.docx'):
             doc = Document(file)
             content = '\n'.join(p.text for p in doc.paragraphs)
-            structures = set(['paragraphs'])
+            structures = set()
             for p in doc.paragraphs:
                 if p.style.name.startswith('Heading'):
                     structures.add('headings')
                 if p.style.name == 'List Bullet' or p.style.name == 'List Number':
                     structures.add('lists')
-            if doc.tables:
+                if p.text.strip():
+                    structures.add('paragraphs')
+            for table in doc.tables:
                 structures.add('tables')
+                summary['visual_elements']['tables'] += 1
             style_profile['structure'] = list(structures)
             style_profile['confidence_scores']['structure'] = 0.8 if structures else 0.6
-            style_profile['visual_elements'] = {'tables': len(doc.tables)}
         
         elif file.filename.endswith(('.png', '.jpg', '.jpeg')):
             content = pytesseract.image_to_string(Image.open(file))
             structures = set(['paragraphs'])
-            if re.search(r'^\s*[\•\-\*]\s+', content, re.MULTILINE):
-                structures.add('lists')
-            if re.search(r'^\s*[A-Z].*\n[-=]+', content, re.MULTILINE):
-                structures.add('headings')
             style_profile['structure'] = list(structures)
-            style_profile['confidence_scores']['structure'] = 0.7
-            style_profile['visual_elements'] = {'images': 1}
+            style_profile['confidence_scores']['structure'] = 0.6
+            summary['visual_elements']['images'] = 1
+        
+        else:
+            raise ValueError("Formato no soportado")
         
         # Analizar tono y propósito
         if content.strip():
             try:
                 response = client.chat.completions.create(
-                    model="gpt-4o",
+                    model="gpt-4o" if client.models.list().data else "gpt-3.5-turbo",
                     messages=[
                         {
                             "role": "system",
@@ -562,43 +568,80 @@ def analyze_document(file):
                 style_profile['confidence_scores']['tone'] = analysis.get('confidence', 0.7)
                 style_profile['confidence_scores']['document_purpose'] = analysis.get('confidence', 0.7)
                 style_profile['analysis_keywords'] = analysis.get('keywords', [])
+                
+                summary['tone_analysis'] = {
+                    'tone': style_profile['tone'],
+                    'confidence': style_profile['confidence_scores']['tone']
+                }
+                summary['purpose_analysis'] = {
+                    'purpose': style_profile['document_purpose'],
+                    'confidence': style_profile['confidence_scores']['document_purpose']
+                }
+            
             except Exception as e:
                 print(f"Error en análisis de tono: {e}")
-                # Reglas de respaldo
-                if 'acta de reunión' in content.lower():
-                    style_profile['document_purpose'] = 'acta'
-                    style_profile['confidence_scores']['document_purpose'] = 0.8
-                elif re.search(r'^\s*Objetivo[s]?:', content, re.MULTILINE):
-                    style_profile['document_purpose'] = 'propuesta'
-                    style_profile['confidence_scores']['document_purpose'] = 0.8
                 formal_keywords = ['estimado', 'cordialmente', 'respecto']
                 technical_keywords = ['implementación', 'arquitectura', 'sistema']
+                purpose_keywords = {
+                    'acta': ['acta', 'reunión', 'acuerdos'],
+                    'propuesta': ['propuesta', 'objetivos', 'presupuesto'],
+                    'manual': ['manual', 'instrucciones', 'guía']
+                }
                 if any(kw in content.lower() for kw in formal_keywords):
                     style_profile['tone'] = 'formal'
                     style_profile['confidence_scores']['tone'] = 0.7
                 elif any(kw in content.lower() for kw in technical_keywords):
                     style_profile['tone'] = 'technical'
                     style_profile['confidence_scores']['tone'] = 0.7
+                for purpose, kws in purpose_keywords.items():
+                    if any(kw in content.lower() for kw in kws):
+                        style_profile['document_purpose'] = purpose
+                        style_profile['confidence_scores']['document_purpose'] = 0.7
+                        break
+                
+                summary['tone_analysis'] = {
+                    'tone': style_profile['tone'],
+                    'confidence': style_profile['confidence_scores']['tone']
+                }
+                summary['purpose_analysis'] = {
+                    'purpose': style_profile['document_purpose'],
+                    'confidence': style_profile['confidence_scores']['document_purpose']
+                }
+            
+            # Generar embeddings
+            try:
+                embedding = client.embeddings.create(input=content[:4000], model="text-embedding-ada-002").data[0].embedding
+                style_profile['embedding'] = embedding
+            except Exception as e:
+                print(f"Error al generar embeddings: {e}")
         else:
             style_profile['tone'] = 'neutral'
             style_profile['document_purpose'] = 'general'
             style_profile['confidence_scores']['tone'] = 0.5
             style_profile['confidence_scores']['document_purpose'] = 0.5
         
-        # Generar embeddings
-        if content.strip():
-            try:
-                embedding = client.embeddings.create(input=content[:4000], model="text-embedding-ada-002").data[0].embedding
-                style_profile['embeddings'] = embedding[:100]  # Limitar tamaño
-            except Exception as e:
-                print(f"Error al generar embeddings: {e}")
+        # Completar resumen
+        summary['content_preview'] = content[:500]
+        summary['word_count'] = len(content.split())
+        summary['detected_structures'] = style_profile['structure']
         
-        analysis_cache[file_hash] = (style_profile, content)
-        return style_profile, content
+        analysis_cache[file_hash] = (style_profile, content, summary)
     
     except Exception as e:
         print(f"Error al analizar documento: {e}")
-        return get_default_style_profile(), ""
+        style_profile = get_default_style_profile()
+        content = ""
+        summary = {
+            'content_preview': '',
+            'word_count': 0,
+            'page_count': 1,
+            'detected_structures': [],
+            'visual_elements': {'images': 0, 'tables': 0},
+            'tone_analysis': {'tone': 'neutral', 'confidence': 0.5},
+            'purpose_analysis': {'purpose': 'general', 'confidence': 0.5}
+        }
+    
+    return style_profile, content, summary
 
 @app.route('/')
 @login_required
@@ -690,7 +733,7 @@ def generate_document():
 
         effective_tone = style_profile['tone'] if style_profile.get('tone') else tone
         structure = style_profile['structure'] if style_profile.get('structure') else ['paragraphs']
-        structure_instruction = f"Usa una estructura que incluya: {', '.join([s if isinstance(s, str) else f'headings ({s.get('headings')} niveles)' for s in structure])}."
+        structure_instruction = f"Usa una estructura que incluya: {', '.join(s for s in structure if not s.startswith('heading_levels'))}."
 
         is_explanatory = re.search(r'^(¿Quién es|¿Qué es|explicar|detallar)\b', prompt, re.IGNORECASE) is not None
         is_html = doc_type == 'html' or re.search(r'\b(html|página web|sitio web)\b', prompt, re.IGNORECASE) is not None
@@ -698,10 +741,10 @@ def generate_document():
         if is_explanatory:
             system_prompt = f"""
             Eres GarBotGPT, un asistente que genera documentos profesionales en formato Markdown con una estructura clara para explicaciones.
-            - Tipo de documento: {doc_type} (e.g., explicación, biografía, informe).
-            - Tono: {effective_tone} (formal, informal, técnico).
+            - Tipo de documento: {doc_type}.
+            - Tono: {effective_tone}.
             - Longitud: {length} (corto: ~100 palabras, medio: ~300 palabras, largo: ~600 palabras).
-            - Idioma: {language} (e.g., es para español, en para inglés, fr para francés).
+            - Idioma: {language}.
             - {structure_instruction}
             - Usa la siguiente estructura en Markdown:
               ```markdown
@@ -716,38 +759,38 @@ def generate_document():
               - ...
               
               ## Contexto Adicional
-              [Párrafos detallando información relevante, como antecedentes, logros, o impacto.]
+              [Párrafos detallando información relevante.]
               
               ## Conclusión
-              [Resumen de la relevancia o importancia del tema.]
+              [Resumen de la relevancia o importancia.]
               ```
-            - Usa encabezados (#, ##), listas (-), negritas (**), y tablas (|...|) cuando sea apropiado.
-            - Considera el contexto de los mensajes anteriores para mantener coherencia en la conversación.
+            - Usa encabezados, listas, negritas, y tablas cuando sea apropiado.
+            - Considera el contexto de los mensajes anteriores.
             """
         elif is_html:
             system_prompt = f"""
             Eres GarBotGPT, un asistente que genera páginas web en formato HTML con CSS y JavaScript si es necesario.
             - Tipo de documento: página web (HTML).
-            - Tono: {effective_tone} (formal, informal, técnico).
+            - Tono: {effective_tone}.
             - Longitud: {length} (corto: ~100 líneas, medio: ~300 líneas, largo: ~600 líneas).
-            - Idioma: {language} (e.g., es para español, en para inglés, fr para francés).
+            - Idioma: {language}.
             - Genera código HTML completo con:
-              - Estructura semántica (<header>, <main>, <footer>, etc.).
-              - Estilos CSS internos (en <style>) adaptados al tono y propósito.
-              - JavaScript opcional (en <script>) si el prompt lo requiere.
-              - Usa un diseño responsivo y moderno.
-            - Considera el contexto de los mensajes anteriores para mantener coherencia.
+              - Estructura semántica (<header>, <main>, <footer>).
+              - Estilos CSS internos adaptados al tono.
+              - JavaScript opcional si el prompt lo requiere.
+              - Usa un diseño responsivo.
+            - Considera el contexto de los mensajes anteriores.
             """
         else:
             system_prompt = f"""
             Eres GarBotGPT, un asistente que genera documentos profesionales en formato Markdown.
-            - Tipo de documento: {doc_type} (e.g., carta formal, informe, correo, contrato, currículum).
-            - Tono: {effective_tone} (formal, informal, técnico).
+            - Tipo de documento: {doc_type}.
+            - Tono: {effective_tone}.
             - Longitud: {length} (corto: ~100 palabras, medio: ~300 palabras, largo: ~600 palabras).
-            - Idioma: {language} (e.g., es para español, en para inglés, fr para francés).
+            - Idioma: {language}.
             - {structure_instruction}
-            - Usa encabezados (#, ##), listas (-), negritas (**), y tablas (|...|) cuando sea apropiado.
-            - Considera el contexto de los mensajes anteriores para mantener coherencia en la conversación.
+            - Usa encabezados, listas, negritas, y tablas cuando sea apropiado.
+            - Considera el contexto de los mensajes anteriores.
             """
 
         messages = [{"role": "system", "content": system_prompt}]
@@ -772,14 +815,13 @@ def generate_document():
             'content_type': 'html' if is_html else 'pdf'
         })
     except openai.AuthenticationError:
-        return jsonify({'error': 'Error de autenticación con OpenAI. Verifica la clave API.'}), 401
+        return jsonify({'error': 'Error de autenticación con OpenAI.'}), 401
     except openai.RateLimitError:
-        return jsonify({'error': 'Límite de solicitudes alcanzado. Intenta de nuevo más tarde.'}), 429
+        return jsonify({'error': 'Límite de solicitudes alcanzado.'}), 429
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 def get_style_profile(profile_id):
-    """Obtiene un perfil de estilo o devuelve el estilo por defecto."""
     if not profile_id:
         return get_default_style_profile()
     conn = get_db_connection()
@@ -797,13 +839,13 @@ def get_style_profile(profile_id):
             'structure': json.loads(profile['structure']),
             'text_color': profile['text_color'],
             'background_color': profile['background_color'],
+            'secondary_colors': json.loads(profile['secondary_colors']),
             'alignment': profile['alignment'],
             'line_spacing': profile['line_spacing'],
             'document_purpose': profile['document_purpose'],
             'confidence_scores': json.loads(profile['confidence_scores']),
             'analysis_keywords': json.loads(profile['analysis_keywords']),
-            'embeddings': json.loads(profile['embeddings']),
-            'visual_elements': json.loads(profile['visual_elements'])
+            'embedding': json.loads(profile['embedding'])
         }
     return get_default_style_profile()
 
@@ -872,19 +914,19 @@ def analyze_document_endpoint():
             return jsonify({'error': 'No se proporcionó ningún archivo'}), 400
         
         file = request.files['file']
+        custom_profile_name = request.form.get('profile_name', None)
         if not (file.filename.endswith(('.pdf', '.txt', '.docx', '.png', '.jpg', '.jpeg'))):
-            return jsonify({'error': 'Formato no soportado. Usa PDF, TXT, DOCX, PNG o JPG.'}), 400
+            return jsonify({'error': 'Formato no soportado. Usa PDF, TXT, DOCX o imágenes.'}), 400
         
-        style_profile, content = analyze_document(file)
+        style_profile, content, summary = analyze_document(file, custom_profile_name)
         
         conn = get_db_connection()
         cursor = conn.cursor()
         cursor.execute('''
             INSERT INTO style_profiles (
                 user_id, name, fonts, font_size, tone, margins, structure, 
-                text_color, background_color, alignment, line_spacing, 
-                document_purpose, confidence_scores, analysis_keywords, 
-                embeddings, visual_elements
+                text_color, background_color, secondary_colors, alignment, 
+                line_spacing, document_purpose, confidence_scores, analysis_keywords, embedding
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             current_user.id,
@@ -896,30 +938,17 @@ def analyze_document_endpoint():
             json.dumps(style_profile['structure']),
             style_profile['text_color'],
             style_profile['background_color'],
+            json.dumps(style_profile['secondary_colors']),
             style_profile['alignment'],
             style_profile['line_spacing'],
             style_profile['document_purpose'],
             json.dumps(style_profile['confidence_scores']),
             json.dumps(style_profile['analysis_keywords']),
-            json.dumps(style_profile['embeddings']),
-            json.dumps(style_profile['visual_elements'])
+            json.dumps(style_profile['embedding'])
         ))
         profile_id = cursor.lastrowid
         conn.commit()
         conn.close()
-        
-        summary = {
-            'content_preview': content[:500],
-            'word_count': len(content.split()),
-            'page_count': getattr(analyze_document, 'page_count', 1),
-            'detected_structures': style_profile['structure'],
-            'tone_analysis': {
-                'tone': style_profile['tone'],
-                'confidence': style_profile['confidence_scores']['tone'],
-                'keywords': style_profile['analysis_keywords']
-            },
-            'visual_elements': style_profile['visual_elements']
-        }
         
         return jsonify({
             'style_profile_id': str(profile_id),
@@ -949,13 +978,13 @@ def get_style_profiles():
             'structure': json.loads(profile['structure']),
             'text_color': profile['text_color'],
             'background_color': profile['background_color'],
+            'secondary_colors': json.loads(profile['secondary_colors']),
             'alignment': profile['alignment'],
             'line_spacing': profile['line_spacing'],
             'document_purpose': profile['document_purpose'],
             'confidence_scores': json.loads(profile['confidence_scores']),
             'analysis_keywords': json.loads(profile['analysis_keywords']),
-            'embeddings': json.loads(profile['embeddings']),
-            'visual_elements': json.loads(profile['visual_elements'])
+            'embedding': json.loads(profile['embedding'])
         }
     
     return jsonify(result)
