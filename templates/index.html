@@ -23,6 +23,7 @@
             --sidebar-text: #111827;
             --section-bg: rgba(255, 255, 255, 0.3);
             --section-hover: rgba(59, 130, 246, 0.1);
+            --error-bg: rgba(239, 68, 68, 0.8);
         }
 
         [data-theme="dark"] {
@@ -41,6 +42,7 @@
             --sidebar-text: #e5e7eb;
             --section-bg: rgba(55, 65, 81, 0.3);
             --section-hover: rgba(96, 165, 250, 0.1);
+            --error-bg: rgba(248, 113, 113, 0.8);
         }
 
         * {
@@ -261,7 +263,7 @@
             padding: 10px;
             border-radius: 8px;
             font-size: 0.8rem;
-            width: 250px;
+            width: 300px;
             z-index: 10;
             opacity: 0;
             pointer-events: none;
@@ -297,6 +299,12 @@
             height: 3px;
             background: var(--accent-color);
             transition: width 0.3s ease;
+        }
+
+        .upload-area p {
+            margin-top: 10px;
+            font-size: 0.9rem;
+            color: var(--text-color);
         }
 
         .purge-styles {
@@ -549,6 +557,7 @@
             font-size: 0.9rem;
             transition: all 0.3s ease;
             backdrop-filter: blur(5px);
+            position: relative;
         }
 
         .suggestion:hover {
@@ -572,6 +581,7 @@
             transition: opacity 0.3s ease;
             pointer-events: none;
             white-space: nowrap;
+            z-index: 10;
         }
 
         .suggestion:hover .suggestion-tooltip {
@@ -592,6 +602,10 @@
             align-items: center;
             gap: 10px;
             backdrop-filter: blur(10px);
+        }
+
+        .toast.error {
+            background: var(--error-bg);
         }
 
         .modal {
@@ -812,8 +826,9 @@
                 <div class="section-content visible">
                     <div class="upload-area" id="uploadArea" role="button" aria-label="Subir documento">
                         <div class="upload-progress" id="uploadProgress"></div>
-                        Arrastra o haz clic para subir un PDF, TXT, DOCX, PNG o JPG
-                        <input type="file" id="fileInput" accept=".pdf,.txt,.docx,.png,.jpg,.jpeg" style="display: none;" aria-label="Seleccionar archivo">
+                        Arrastra o haz clic para subir un documento
+                        <p id="supportedFormats">Formatos soportados: PDF, TXT, PNG, JPG, JPEG</p>
+                        <input type="file" id="fileInput" accept=".pdf,.txt,.png,.jpg,.jpeg" style="display: none;" aria-label="Seleccionar archivo">
                     </div>
                 </div>
             </div>
@@ -870,12 +885,14 @@
         const fileInput = document.getElementById('fileInput');
         const uploadProgress = document.getElementById('uploadProgress');
         const suggestionsContainer = document.getElementById('suggestions');
+        const supportedFormatsText = document.getElementById('supportedFormats');
         let currentContentBlob = null;
         let currentContentType = 'pdf';
         let currentSessionId = 'default';
         let sessions = JSON.parse(localStorage.getItem('sessions') || '{}');
         let offlineQueue = [];
         let sectionStates = JSON.parse(localStorage.getItem('sectionStates') || '{}');
+        let supportedFormats = ['.pdf', '.txt', '.png', '.jpg', '.jpeg'];
 
         const baseSuggestions = [
             { prompt: 'Escribe una carta formal', description: 'Genera una carta profesional para negocios o comunicaciones oficiales.' },
@@ -884,6 +901,24 @@
             { prompt: 'Diseña una página web sencilla', description: 'Genera código HTML para una página web responsiva.' },
             { prompt: 'Explica qué es la inteligencia artificial', description: 'Proporciona una explicación estructurada sobre IA.' }
         ];
+
+        async function fetchSupportedFormats() {
+            try {
+                const response = await fetch('/analyze_document', { method: 'GET' });
+                const data = await response.json();
+                if (data.supported_formats) {
+                    supportedFormats = data.supported_formats;
+                    updateFileInputAccept();
+                    supportedFormatsText.textContent = `Formatos soportados: ${supportedFormats.map(f => f.slice(1).toUpperCase()).join(', ')}`;
+                }
+            } catch (error) {
+                console.error('Error fetching supported formats:', error);
+            }
+        }
+
+        function updateFileInputAccept() {
+            fileInput.accept = supportedFormats.join(',');
+        }
 
         function toggleSection(header) {
             const content = header.nextElementSibling;
@@ -942,13 +977,17 @@
                             <strong>Fuentes:</strong> ${Object.values(profile.fonts).join(', ')}<br>
                             <strong>Tono:</strong> ${profile.tone}<br>
                             <strong>Propósito:</strong> ${profile.document_purpose}<br>
-                            <strong>Elementos Visuales:</strong> Imágenes: ${profile.visual_elements.images || 0}, Tablas: ${profile.visual_elements.tables || 0}<br>
-                            <strong>Palabras Clave:</strong> ${profile.analysis_keywords.join(', ') || 'Ninguna'}
+                            <strong>Color de Texto:</strong> ${profile.text_color}<br>
+                            <strong>Colores Secundarios:</strong> ${profile.secondary_colors.join(', ') || 'Ninguno'}<br>
+                            <strong>Estructuras:</strong> ${profile.structure.join(', ') || 'Ninguna'}<br>
+                            <strong>Palabras Clave:</strong> ${profile.analysis_keywords.join(', ') || 'Ninguna'}<br>
+                            <strong>Embedding:</strong> ${profile.embedding.length ? 'Presente' : 'Ausente'}
                         </div>
                     `;
                     item.onclick = (e) => {
                         if (e.target.closest('button')) return;
                         styleSelect.value = id;
+                        showToast(`Perfil "${profile.name || id}" seleccionado`);
                     };
                     item.setAttribute('role', 'listitem');
                     styleList.appendChild(item);
@@ -1059,13 +1098,13 @@
 
         function showToast(message, type = 'info') {
             const toast = document.createElement('div');
-            toast.className = 'toast';
+            toast.className = `toast ${type}`;
             toast.innerHTML = `${type === 'error' ? '<i class="fas fa-exclamation-circle"></i>' : '<i class="fas fa-check-circle"></i>'} ${message}`;
             document.body.appendChild(toast);
             setTimeout(() => toast.remove(), 4000);
         }
 
-        function updateSuggestions() {
+        async function updateSuggestions() {
             suggestionsContainer.innerHTML = '';
             const sessionMessages = sessions[currentSessionId]?.messages || [];
             const recentPrompts = sessionMessages
@@ -1073,7 +1112,28 @@
                 .map(msg => msg.content)
                 .slice(-3);
             
+            const styleProfileId = document.getElementById('styleProfile').value;
+            let styleBasedSuggestions = [];
+            if (styleProfileId) {
+                try {
+                    const response = await fetch('/style_profiles');
+                    const profiles = await response.json();
+                    const profile = profiles[styleProfileId];
+                    if (profile) {
+                        const purpose = profile.document_purpose || 'general';
+                        const tone = profile.tone || 'neutral';
+                        styleBasedSuggestions = [
+                            { prompt: `Escribe un ${purpose} con tono ${tone}`, description: `Basado en el perfil "${profile.name || styleProfileId}".` },
+                            { prompt: `Redacta un documento usando el estilo ${profile.name || 'seleccionado'}`, description: `Aplica fuentes y estructuras del perfil.` }
+                        ];
+                    }
+                } catch (error) {
+                    console.error('Error fetching style profile for suggestions:', error);
+                }
+            }
+
             const suggestions = [
+                ...styleBasedSuggestions,
                 ...baseSuggestions,
                 ...recentPrompts.map(prompt => ({
                     prompt,
@@ -1108,9 +1168,9 @@
                 messageDiv.onclick = () => editMessage(messageDiv);
             } else {
                 const escapedContent = content
-                    .replace(/&/g, '&')
-                    .replace(/</g, '<')
-                    .replace(/>/g, '>');
+                    .replace(/&/g, '&amp;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;');
                 const renderedContent = marked.parse(escapedContent);
                 messageDiv.innerHTML = `
                     <div class="ai-message-content">${renderedContent}</div>
@@ -1201,6 +1261,7 @@
                 if (data.error) {
                     addMessage(`Error: ${data.error}`);
                     offlineQueue.push(prompt);
+                    showToast(`Error: ${data.error}`, 'error');
                 } else {
                     addMessage(data.document, false, data.content_type);
                     offlineQueue = offlineQueue.filter(p => p !== prompt);
@@ -1344,6 +1405,10 @@
 
         async function uploadDocument(file) {
             if (!file) return;
+            if (!supportedFormats.some(fmt => file.name.toLowerCase().endsWith(fmt.slice(1)))) {
+                showToast(`Formato no soportado. Usa ${supportedFormats.map(f => f.slice(1).toUpperCase()).join(', ')}.`, 'error');
+                return;
+            }
             const formData = new FormData();
             formData.append('file', file);
             uploadProgress.style.width = '10%';
@@ -1360,6 +1425,7 @@
                 } else {
                     showToast('✅ Documento analizado y perfil de estilo creado');
                     loadStyleProfiles();
+                    updateSuggestions();
                 }
             } catch (error) {
                 uploadProgress.style.width = '0';
@@ -1388,7 +1454,7 @@
             if (file && ['application/pdf', 'text/plain', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'image/png', 'image/jpeg'].includes(file.type)) {
                 uploadDocument(file);
             } else {
-                showToast('Por favor, sube un archivo PDF, TXT, DOCX, PNG o JPG', 'error');
+                showToast(`Formato no soportado. Usa ${supportedFormats.map(f => f.slice(1).toUpperCase()).join(', ')}.`, 'error');
             }
         });
 
@@ -1413,6 +1479,7 @@
             loadStyleProfiles();
             initSectionStates();
             updateSuggestions();
+            fetchSupportedFormats();
 
             if (sessions[currentSessionId]) {
                 loadSession(currentSessionId);
