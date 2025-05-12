@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>GarBotGPT</title>
     <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
     <style>
         :root {
             --bg-color: #e5e7eb;
@@ -20,6 +21,8 @@
             --toast-text: #ffffff;
             --sidebar-bg: rgba(249, 250, 251, 0.15);
             --sidebar-text: #111827;
+            --section-bg: rgba(255, 255, 255, 0.3);
+            --section-hover: rgba(59, 130, 246, 0.1);
         }
 
         [data-theme="dark"] {
@@ -36,6 +39,8 @@
             --toast-text: #111827;
             --sidebar-bg: rgba(31, 41, 55, 0.15);
             --sidebar-text: #e5e7eb;
+            --section-bg: rgba(55, 65, 81, 0.3);
+            --section-hover: rgba(96, 165, 250, 0.1);
         }
 
         * {
@@ -67,11 +72,12 @@
             padding: 20px;
             display: flex;
             flex-direction: column;
-            gap: 15px;
+            gap: 10px;
             transition: transform 0.3s ease;
             backdrop-filter: blur(10px);
-            -webkit-backdrop-filter: blur(10px);
             border-right: 1px solid var(--border-color);
+            overflow-y: auto;
+            flex-shrink: 0;
         }
 
         .sidebar.hidden {
@@ -82,7 +88,8 @@
             flex: 1;
             display: flex;
             flex-direction: column;
-            transition: all 0.3s ease;
+            transition: width 0.3s ease;
+            width: calc(100vw - 350px);
         }
 
         .sidebar.hidden ~ .main {
@@ -93,17 +100,12 @@
             display: flex;
             justify-content: space-between;
             align-items: center;
+            margin-bottom: 15px;
         }
 
-        .sidebar h2 {
-            font-size: 1.4rem;
+        .sidebar-header h2 {
+            font-size: 1.5rem;
             font-weight: 700;
-        }
-
-        .sidebar h3 {
-            font-size: 1.2rem;
-            font-weight: 600;
-            margin-top: 10px;
         }
 
         .sidebar-toggle {
@@ -112,6 +114,54 @@
             color: var(--sidebar-text);
             font-size: 1.4rem;
             cursor: pointer;
+            transition: transform 0.3s ease;
+        }
+
+        .sidebar-toggle:hover {
+            transform: rotate(90deg);
+        }
+
+        .sidebar-section {
+            background: var(--section-bg);
+            border-radius: 10px;
+            margin-bottom: 10px;
+            overflow: hidden;
+            transition: all 0.3s ease;
+        }
+
+        .section-header {
+            padding: 12px 15px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            cursor: pointer;
+            font-size: 1.1rem;
+            font-weight: 600;
+            transition: background 0.3s ease;
+        }
+
+        .section-header:hover {
+            background: var(--section-hover);
+        }
+
+        .section-header i {
+            transition: transform 0.3s ease;
+        }
+
+        .section-header.collapsed i {
+            transform: rotate(-90deg);
+        }
+
+        .section-content {
+            padding: 0 15px;
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.3s ease, padding 0.3s ease;
+        }
+
+        .section-content.visible {
+            padding: 15px;
+            max-height: 500px;
         }
 
         .sidebar input, .sidebar select {
@@ -123,12 +173,40 @@
             color: var(--text-color);
             font-size: 0.9rem;
             backdrop-filter: blur(5px);
-            -webkit-backdrop-filter: blur(5px);
+            margin-bottom: 10px;
+            transition: border-color 0.3s ease;
+        }
+
+        .sidebar input:focus, .sidebar select:focus {
+            outline: none;
+            border-color: var(--accent-color);
+        }
+
+        .search-container {
+            position: relative;
+            margin-bottom: 10px;
+        }
+
+        .search-container .fa-times {
+            position: absolute;
+            right: 10px;
+            top: 50%;
+            transform: translateY(-50%);
+            cursor: pointer;
+            color: var(--text-color);
+            opacity: 0;
+            transition: opacity 0.3s ease;
+        }
+
+        .search-container input:not(:placeholder-shown) + .fa-times {
+            opacity: 1;
         }
 
         .session-list, .style-list {
-            flex: 1;
+            max-height: 200px;
             overflow-y: auto;
+            scrollbar-width: thin;
+            scrollbar-color: var(--accent-color) var(--input-bg);
         }
 
         .session-item, .style-item {
@@ -140,8 +218,8 @@
             justify-content: space-between;
             align-items: center;
             background: var(--container-bg);
-            backdrop-filter: blur(5px);
-            -webkit-backdrop-filter: blur(5px);
+            margin-bottom: 5px;
+            position: relative;
         }
 
         .session-item:hover, .style-item:hover {
@@ -149,11 +227,50 @@
             color: white;
         }
 
+        .style-item .style-info {
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .style-item .style-actions {
+            display: flex;
+            gap: 5px;
+        }
+
         .style-item button {
             background: none;
             border: none;
             color: var(--text-color);
             cursor: pointer;
+            font-size: 1rem;
+            transition: color 0.3s ease;
+        }
+
+        .style-item button:hover {
+            color: var(--accent-color);
+        }
+
+        .style-tooltip {
+            position: absolute;
+            left: 100%;
+            top: 0;
+            background: var(--toast-bg);
+            color: var(--toast-text);
+            padding: 10px;
+            border-radius: 8px;
+            font-size: 0.8rem;
+            width: 250px;
+            z-index: 10;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.3s ease;
+            box-shadow: var(--shadow);
+        }
+
+        .style-item:hover .style-tooltip {
+            opacity: 1;
         }
 
         .upload-area {
@@ -164,11 +281,22 @@
             cursor: pointer;
             background: var(--input-bg);
             backdrop-filter: blur(5px);
-            -webkit-backdrop-filter: blur(5px);
+            position: relative;
+            transition: background 0.3s ease;
         }
 
         .upload-area.dragover {
             background: var(--ai-bg);
+        }
+
+        .upload-progress {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 0;
+            height: 3px;
+            background: var(--accent-color);
+            transition: width 0.3s ease;
         }
 
         .purge-styles {
@@ -180,20 +308,15 @@
             cursor: pointer;
             font-size: 0.9rem;
             font-weight: 600;
+            width: 100%;
             transition: all 0.3s ease;
             backdrop-filter: blur(5px);
-            -webkit-backdrop-filter: blur(5px);
         }
 
         .purge-styles:hover {
             background: #2563eb;
             transform: translateY(-2px);
             box-shadow: 0 8px 20px rgba(0, 0, 0, 0.3);
-        }
-
-        .purge-styles:active {
-            transform: translateY(0);
-            box-shadow: var(--shadow);
         }
 
         .header {
@@ -204,7 +327,6 @@
             align-items: center;
             background: var(--container-bg);
             backdrop-filter: blur(10px);
-            -webkit-backdrop-filter: blur(10px);
         }
 
         .header h1 {
@@ -259,7 +381,7 @@
             flex-direction: column;
             gap: 25px;
             background: transparent;
-            position: relative;
+            width: 100%;
         }
 
         .message {
@@ -269,10 +391,8 @@
             line-height: 1.6;
             font-size: 1rem;
             animation: slideIn 0.5s ease;
-            position: relative;
             box-shadow: var(--shadow);
             backdrop-filter: blur(10px);
-            -webkit-backdrop-filter: blur(10px);
             word-break: break-word;
             overflow-wrap: break-word;
         }
@@ -290,7 +410,6 @@
             color: var(--text-color);
             align-self: flex-start;
             border-bottom-left-radius: 4px;
-            position: relative;
         }
 
         .ai-message-content {
@@ -345,7 +464,6 @@
             background: var(--ai-bg);
             border-radius: 18px;
             backdrop-filter: blur(10px);
-            -webkit-backdrop-filter: blur(10px);
         }
 
         .typing span {
@@ -364,15 +482,15 @@
             padding: 20px;
             border-top: 1px solid var(--border-color);
             background: var(--container-bg);
-            position: relative;
             backdrop-filter: blur(10px);
-            -webkit-backdrop-filter: blur(10px);
+            width: 100%;
         }
 
         .input-group {
             display: flex;
             gap: 15px;
             align-items: flex-end;
+            width: 100%;
         }
 
         textarea {
@@ -388,7 +506,6 @@
             resize: none;
             transition: all 0.3s ease;
             backdrop-filter: blur(5px);
-            -webkit-backdrop-filter: blur(5px);
         }
 
         textarea:focus {
@@ -416,16 +533,12 @@
             box-shadow: 0 8px 20px rgba(0, 0, 0, 0.3);
         }
 
-        button.send:active {
-            transform: translateY(0);
-            box-shadow: var(--shadow);
-        }
-
         .suggestions {
             display: flex;
             gap: 10px;
             margin-bottom: 15px;
             flex-wrap: wrap;
+            width: 100%;
         }
 
         .suggestion {
@@ -435,9 +548,7 @@
             cursor: pointer;
             font-size: 0.9rem;
             transition: all 0.3s ease;
-            position: relative;
             backdrop-filter: blur(5px);
-            -webkit-backdrop-filter: blur(5px);
         }
 
         .suggestion:hover {
@@ -481,7 +592,6 @@
             align-items: center;
             gap: 10px;
             backdrop-filter: blur(10px);
-            -webkit-backdrop-filter: blur(10px);
         }
 
         .modal {
@@ -507,7 +617,6 @@
             overflow-y: auto;
             position: relative;
             backdrop-filter: blur(10px);
-            -webkit-backdrop-filter: blur(10px);
         }
 
         .modal-content h2 {
@@ -569,13 +678,24 @@
         @media (max-width: 768px) {
             .sidebar {
                 width: 100%;
-                position: absolute;
-                z-index: 100;
-                height: 100%;
+                position: fixed;
+                z-index: 1000;
+                height: 100vh;
+                top: 0;
+                left: 0;
+                transition: transform 0.3s ease;
             }
 
             .sidebar.hidden {
                 transform: translateX(-100%);
+            }
+
+            .main {
+                width: 100vw;
+            }
+
+            .sidebar.hidden ~ .main {
+                width: 100vw;
             }
 
             .container {
@@ -592,7 +712,7 @@
                 padding: 12px 18px;
             }
 
-            .textarea {
+            textarea {
                 min-height: 50px;
                 font-size: 0.95rem;
             }
@@ -601,98 +721,140 @@
                 padding: 12px 20px;
                 font-size: 0.95rem;
             }
+
+            .style-tooltip {
+                left: 10px;
+                top: 100%;
+                width: 200px;
+            }
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <div class="sidebar" id="sidebar">
+        <div class="sidebar" id="sidebar" role="navigation" aria-label="Menú lateral">
             <div class="sidebar-header">
-                <h2>Opciones</h2>
-                <button class="sidebar-toggle" onclick="toggleSidebar()">✕</button>
+                <h2><i class="fas fa-cog"></i> Opciones</h2>
+                <button class="sidebar-toggle" onclick="toggleSidebar()" aria-label="Cerrar menú"><i class="fas fa-times"></i></button>
             </div>
-            <input type="text" id="searchInput" placeholder="Buscar en historial..." oninput="searchSessions()">
-            <h3>Sesiones</h3>
-            <div class="session-list" id="sessionList"></div>
-            <h3>Configuración de Documento</h3>
-            <select id="docType">
-                <option value="general">General</option>
-                <option value="formal_letter">Carta Formal</option>
-                <option value="report">Informe</option>
-                <option value="email">Correo Electrónico</option>
-                <option value="contract">Contrato</option>
-                <option value="resume">Currículum</option>
-                <option value="html">Página Web (HTML)</option>
-            </select>
-            <select id="tone">
-                <option value="neutral">Neutral</option>
-                <option value="formal">Formal</option>
-                <option value="informal">Informal</option>
-                <option value="technical">Técnico</option>
-            </select>
-            <select id="length">
-                <option value="short">Corto</option>
-                <option value="medium">Medio</option>
-                <option value="long">Largo</option>
-            </select>
-            <select id="language">
-                <option value="es">Español</option>
-                <option value="en">Inglés</option>
-                <option value="fr">Francés</option>
-            </select>
-            <h3>Perfiles de Estilo</h3>
-            <select id="styleProfile">
-                <option value="">Ninguno</option>
-            </select>
-            <div class="style-list" id="styleList"></div>
-            <button class="purge-styles" onclick="purgeStyleProfiles()">Purgar Perfiles de Estilo</button>
-            <h3>Subir Documento</h3>
-            <div class="upload-area" id="uploadArea">
-                Arrastra o haz clic para subir un PDF/TXT
-                <input type="file" id="fileInput" accept=".pdf,.txt" style="display: none;">
+            <div class="sidebar-section">
+                <div class="section-header" onclick="toggleSection(this)" aria-expanded="true" role="button" aria-label="Alternar sección de búsqueda">
+                    <span><i class="fas fa-search"></i> Buscar</span>
+                    <i class="fas fa-chevron-down"></i>
+                </div>
+                <div class="section-content visible">
+                    <div class="search-container">
+                        <input type="text" id="searchInput" placeholder="Buscar sesiones o perfiles..." oninput="searchItems()" aria-label="Buscar en sesiones y perfiles">
+                        <i class="fas fa-times" onclick="clearSearch()"></i>
+                    </div>
+                </div>
+            </div>
+            <div class="sidebar-section">
+                <div class="section-header" onclick="toggleSection(this)" aria-expanded="true" role="button" aria-label="Alternar sección de sesiones">
+                    <span><i class="fas fa-history"></i> Sesiones</span>
+                    <i class="fas fa-chevron-down"></i>
+                </div>
+                <div class="section-content visible">
+                    <div class="session-list" id="sessionList" role="list" aria-label="Lista de sesiones"></div>
+                </div>
+            </div>
+            <div class="sidebar-section">
+                <div class="section-header" onclick="toggleSection(this)" aria-expanded="true" role="button" aria-label="Alternar sección de configuración">
+                    <span><i class="fas fa-file-alt"></i> Configuración de Documento</span>
+                    <i class="fas fa-chevron-down"></i>
+                </div>
+                <div class="section-content visible">
+                    <select id="docType" aria-label="Tipo de documento">
+                        <option value="general">General</option>
+                        <option value="formal_letter">Carta Formal</option>
+                        <option value="report">Informe</option>
+                        <option value="email">Correo Electrónico</option>
+                        <option value="contract">Contrato</option>
+                        <option value="resume">Currículum</option>
+                        <option value="html">Página Web (HTML)</option>
+                    </select>
+                    <select id="tone" aria-label="Tono del documento">
+                        <option value="neutral">Neutral</option>
+                        <option value="formal">Formal</option>
+                        <option value="informal">Informal</option>
+                        <option value="technical">Técnico</option>
+                    </select>
+                    <select id="length" aria-label="Longitud del documento">
+                        <option value="short">Corto</option>
+                        <option value="medium">Medio</option>
+                        <option value="long">Largo</option>
+                    </select>
+                    <select id="language" aria-label="Idioma del documento">
+                        <option value="es">Español</option>
+                        <option value="en">Inglés</option>
+                        <option value="fr">Francés</option>
+                    </select>
+                </div>
+            </div>
+            <div class="sidebar-section">
+                <div class="section-header" onclick="toggleSection(this)" aria-expanded="true" role="button" aria-label="Alternar sección de perfiles de estilo">
+                    <span><i class="fas fa-palette"></i> Perfiles de Estilo</span>
+                    <i class="fas fa-chevron-down"></i>
+                </div>
+                <div class="section-content visible">
+                    <select id="styleProfile" aria-label="Seleccionar perfil de estilo">
+                        <option value="">Ninguno</option>
+                    </select>
+                    <div class="style-list" id="styleList" role="list" aria-label="Lista de perfiles de estilo"></div>
+                    <button class="purge-styles" onclick="purgeStyleProfiles()" aria-label="Eliminar todos los perfiles de estilo">Purgar Perfiles</button>
+                </div>
+            </div>
+            <div class="sidebar-section">
+                <div class="section-header" onclick="toggleSection(this)" aria-expanded="true" role="button" aria-label="Alternar sección de subida de documentos">
+                    <span><i class="fas fa-upload"></i> Subir Documento</span>
+                    <i class="fas fa-chevron-down"></i>
+                </div>
+                <div class="section-content visible">
+                    <div class="upload-area" id="uploadArea" role="button" aria-label="Subir documento">
+                        <div class="upload-progress" id="uploadProgress"></div>
+                        Arrastra o haz clic para subir un PDF, TXT, DOCX, PNG o JPG
+                        <input type="file" id="fileInput" accept=".pdf,.txt,.docx,.png,.jpg,.jpeg" style="display: none;" aria-label="Seleccionar archivo">
+                    </div>
+                </div>
             </div>
         </div>
         <div class="main">
             <div class="header">
-                <button class="sidebar-toggle" onclick="toggleSidebar()">☰</button>
+                <button class="sidebar-toggle" onclick="toggleSidebar()" aria-label="Abrir menú"><i class="fas fa-bars"></i></button>
                 <h1>GarBotGPT</h1>
                 <div class="header-buttons">
-                    <button class="new-session" onclick="newSession()"><span class="tooltip">Nueva sesión</span>📝</button>
-                    <button class="export-chat" onclick="exportChat()"><span class="tooltip">Exportar chat</span>📤</button>
-                    <button class="clear-chat" onclick="clearChat()"><span class="tooltip">Limpiar chat</span>🗑️</button>
-                    <button class="theme-toggle" onclick="toggleTheme()"><span class="tooltip">Cambiar tema</span>☀️</button>
-                    <a href="{{ url_for('logout') }}" class="logout-button"><span class="tooltip">Cerrar sesión</span>🚪</a>
+                    <button class="new-session" onclick="newSession()"><span class="tooltip">Nueva sesión</span><i class="fas fa-file"></i></button>
+                    <button class="export-chat" onclick="exportChat()"><span class="tooltip">Exportar chat</span><i class="fas fa-download"></i></button>
+                    <button class="clear-chat" onclick="clearChat()"><span class="tooltip">Limpiar chat</span><i class="fas fa-trash"></i></button>
+                    <button class="theme-toggle" onclick="toggleTheme()"><span class="tooltip">Cambiar tema</span><i class="fas fa-sun"></i></button>
+                    <a href="{{ url_for('logout') }}" class="logout-button"><span class="tooltip">Cerrar sesión</span><i class="fas fa-sign-out-alt"></i></a>
                 </div>
             </div>
-            <div class="chat-area" id="chatArea">
-                <!-- Mensajes se agregan aquí dinámicamente -->
-            </div>
+            <div class="chat-area" id="chatArea" role="log" aria-label="Área de chat"></div>
             <div class="input-area">
                 <div class="progress-bar" id="progressBar"></div>
                 <div class="suggestions" id="suggestions"></div>
                 <div class="input-group">
-                    <textarea id="prompt" placeholder="Describe el documento que deseas generar..."></textarea>
-                    <button class="send" onclick="sendMessage()">Enviar</button>
+                    <textarea id="prompt" placeholder="Describe el documento que deseas generar..." aria-label="Ingresar descripción del documento"></textarea>
+                    <button class="send" onclick="sendMessage()" aria-label="Enviar mensaje">Enviar</button>
                 </div>
             </div>
         </div>
     </div>
-    <div class="modal" id="previewModal">
+    <div class="modal" id="previewModal" role="dialog" aria-label="Vista previa del documento">
         <div class="modal-content">
-            <button class="modal-close" onclick="closeModal()">✕</button>
+            <button class="modal-close" onclick="closeModal()" aria-label="Cerrar vista previa">✕</button>
             <h2>Vista Previa</h2>
             <div id="previewContent"></div>
-            <button class="send" onclick="downloadCurrentContent()">Descargar</button>
+            <button class="send" onclick="downloadCurrentContent()" aria-label="Descargar documento">Descargar</button>
         </div>
     </div>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script>
-        // Configurar opciones de marked.js para manejar mejor el Markdown
         marked.setOptions({
-            breaks: true, // Permitir saltos de línea simples
-            gfm: true, // Habilitar GitHub Flavored Markdown
+            breaks: true,
+            gfm: true,
             highlight: function(code, lang) {
-                // Opcional: Añadir resaltado de sintaxis si usas una librería como highlight.js
                 return code;
             }
         });
@@ -706,14 +868,15 @@
         const progressBar = document.getElementById('progressBar');
         const uploadArea = document.getElementById('uploadArea');
         const fileInput = document.getElementById('fileInput');
+        const uploadProgress = document.getElementById('uploadProgress');
         const suggestionsContainer = document.getElementById('suggestions');
         let currentContentBlob = null;
         let currentContentType = 'pdf';
         let currentSessionId = 'default';
         let sessions = JSON.parse(localStorage.getItem('sessions') || '{}');
         let offlineQueue = [];
+        let sectionStates = JSON.parse(localStorage.getItem('sectionStates') || '{}');
 
-        // Lista de sugerencias base
         const baseSuggestions = [
             { prompt: 'Escribe una carta formal', description: 'Genera una carta profesional para negocios o comunicaciones oficiales.' },
             { prompt: 'Redacta un informe técnico', description: 'Crea un informe detallado con estructura técnica y datos.' },
@@ -722,20 +885,40 @@
             { prompt: 'Explica qué es la inteligencia artificial', description: 'Proporciona una explicación estructurada sobre IA.' }
         ];
 
-        // Cargar sesiones
+        function toggleSection(header) {
+            const content = header.nextElementSibling;
+            const isCollapsed = header.classList.toggle('collapsed');
+            content.classList.toggle('visible', !isCollapsed);
+            const sectionName = header.textContent.trim().toLowerCase().replace(/\s+/g, '-');
+            sectionStates[sectionName] = !isCollapsed;
+            localStorage.setItem('sectionStates', JSON.stringify(sectionStates));
+            header.setAttribute('aria-expanded', !isCollapsed);
+        }
+
+        function initSectionStates() {
+            document.querySelectorAll('.sidebar-section').forEach(section => {
+                const header = section.querySelector('.section-header');
+                const sectionName = header.textContent.trim().toLowerCase().replace(/\s+/g, '-');
+                const isOpen = sectionStates[sectionName] !== false;
+                header.classList.toggle('collapsed', !isOpen);
+                section.querySelector('.section-content').classList.toggle('visible', isOpen);
+                header.setAttribute('aria-expanded', isOpen);
+            });
+        }
+
         function loadSessions() {
             sessionList.innerHTML = '';
             Object.keys(sessions).forEach(id => {
                 const session = sessions[id];
                 const item = document.createElement('div');
                 item.className = 'session-item';
-                item.textContent = session.name || `Sesión ${id}`;
+                item.innerHTML = `<span><i class="fas fa-comment"></i> ${session.name || `Sesión ${id}`}</span>`;
                 item.onclick = () => loadSession(id);
+                item.setAttribute('role', 'listitem');
                 sessionList.appendChild(item);
             });
         }
 
-        // Cargar perfiles de estilo
         async function loadStyleProfiles() {
             try {
                 const response = await fetch('/style_profiles');
@@ -748,18 +931,30 @@
                     const item = document.createElement('div');
                     item.className = 'style-item';
                     item.innerHTML = `
-                        ${profile.font_name} (${profile.tone})
-                        <button onclick="deleteStyleProfile('${id}')">🗑️</button>
+                        <div class="style-info">
+                            <i class="fas fa-paint-brush"></i> ${profile.name || `${profile.fonts.normal} (${profile.tone})`}
+                        </div>
+                        <div class="style-actions">
+                            <button onclick="deleteStyleProfile('${id}')" aria-label="Eliminar perfil de estilo"><i class="fas fa-trash"></i></button>
+                        </div>
+                        <div class="style-tooltip">
+                            <strong>Nombre:</strong> ${profile.name || 'Sin nombre'}<br>
+                            <strong>Fuentes:</strong> ${Object.values(profile.fonts).join(', ')}<br>
+                            <strong>Tono:</strong> ${profile.tone}<br>
+                            <strong>Propósito:</strong> ${profile.document_purpose}<br>
+                            <strong>Elementos Visuales:</strong> Imágenes: ${profile.visual_elements.images || 0}, Tablas: ${profile.visual_elements.tables || 0}<br>
+                            <strong>Palabras Clave:</strong> ${profile.analysis_keywords.join(', ') || 'Ninguna'}
+                        </div>
                     `;
                     item.onclick = (e) => {
-                        if (e.target.tagName !== 'BUTTON') {
-                            styleSelect.value = id;
-                        }
+                        if (e.target.closest('button')) return;
+                        styleSelect.value = id;
                     };
+                    item.setAttribute('role', 'listitem');
                     styleList.appendChild(item);
                     const option = document.createElement('option');
                     option.value = id;
-                    option.textContent = `${profile.font_name} (${profile.tone})`;
+                    option.textContent = profile.name || `${profile.fonts.normal} (${profile.tone})`;
                     styleSelect.appendChild(option);
                 });
             } catch (error) {
@@ -767,19 +962,21 @@
             }
         }
 
-        // Eliminar perfil de estilo
         async function deleteStyleProfile(id) {
+            if (!confirm('¿Estás seguro de que quieres eliminar este perfil de estilo?')) return;
             try {
                 const response = await fetch(`/style_profiles/${id}`, { method: 'DELETE' });
                 const data = await response.json();
                 showToast(data.message);
                 loadStyleProfiles();
+                if (document.getElementById('styleProfile').value === id) {
+                    document.getElementById('styleProfile').value = '';
+                }
             } catch (error) {
                 showToast(`Error: ${error.message}`, 'error');
             }
         }
 
-        // Purgar todos los perfiles de estilo
         async function purgeStyleProfiles() {
             if (!confirm('¿Estás seguro de que quieres eliminar todos los perfiles de estilo?')) return;
             try {
@@ -797,7 +994,6 @@
             }
         }
 
-        // Cargar sesión específica
         function loadSession(id) {
             currentSessionId = id;
             chatArea.innerHTML = '';
@@ -807,7 +1003,6 @@
             updateSuggestions();
         }
 
-        // Nueva sesión
         function newSession() {
             const name = prompt('Nombre de la nueva sesión:') || `Sesión ${Date.now()}`;
             currentSessionId = Date.now().toString();
@@ -819,13 +1014,11 @@
             updateSuggestions();
         }
 
-        // Guardar sesiones
         function saveSessions() {
             localStorage.setItem('sessions', JSON.stringify(sessions));
         }
 
-        // Buscar en sesiones
-        function searchSessions() {
+        function searchItems() {
             const query = searchInput.value.toLowerCase();
             sessionList.innerHTML = '';
             Object.keys(sessions).forEach(id => {
@@ -833,23 +1026,45 @@
                 if (session.name.toLowerCase().includes(query) || session.messages.some(msg => msg.content.toLowerCase().includes(query))) {
                     const item = document.createElement('div');
                     item.className = 'session-item';
-                    item.textContent = session.name || `Sesión ${id}`;
+                    const name = session.name || `Sesión ${id}`;
+                    item.innerHTML = `<span><i class="fas fa-comment"></i> ${highlightMatch(name, query)}</span>`;
                     item.onclick = () => loadSession(id);
+                    item.setAttribute('role', 'listitem');
                     sessionList.appendChild(item);
                 }
             });
+            loadStyleProfiles().then(() => {
+                const styleItems = styleList.children;
+                Array.from(styleItems).forEach(item => {
+                    const name = item.querySelector('.style-info').textContent.toLowerCase();
+                    if (!query || name.includes(query)) {
+                        item.style.display = 'flex';
+                    } else {
+                        item.style.display = 'none';
+                    }
+                });
+            });
         }
 
-        // Mostrar notificación toast
+        function highlightMatch(text, query) {
+            if (!query) return text;
+            const regex = new RegExp(`(${query})`, 'gi');
+            return text.replace(regex, '<mark>$1</mark>');
+        }
+
+        function clearSearch() {
+            searchInput.value = '';
+            searchItems();
+        }
+
         function showToast(message, type = 'info') {
             const toast = document.createElement('div');
             toast.className = 'toast';
-            toast.innerHTML = `${type === 'error' ? '❌' : '✅'} ${message}`;
+            toast.innerHTML = `${type === 'error' ? '<i class="fas fa-exclamation-circle"></i>' : '<i class="fas fa-check-circle"></i>'} ${message}`;
             document.body.appendChild(toast);
             setTimeout(() => toast.remove(), 4000);
         }
 
-        // Actualizar sugerencias dinámicas
         function updateSuggestions() {
             suggestionsContainer.innerHTML = '';
             const sessionMessages = sessions[currentSessionId]?.messages || [];
@@ -864,7 +1079,7 @@
                     prompt,
                     description: 'Basado en tu historial reciente.'
                 }))
-            ].slice(0, 5); // Limitar a 5 sugerencias
+            ].slice(0, 5);
 
             suggestions.forEach(({ prompt, description }) => {
                 const suggestion = document.createElement('div');
@@ -878,22 +1093,20 @@
             });
         }
 
-        // Usar una sugerencia
         function useSuggestion(prompt) {
             promptInput.value = prompt;
             promptInput.focus();
             sendMessage();
         }
 
-        // Agregar mensaje
         function addMessage(content, isUser = false, contentType = 'pdf', save = true) {
             const messageDiv = document.createElement('div');
             messageDiv.className = isUser ? 'message user-message' : 'message ai-message';
+            messageDiv.setAttribute('role', 'article');
             if (isUser) {
                 messageDiv.textContent = content;
                 messageDiv.onclick = () => editMessage(messageDiv);
             } else {
-                // Escapar el contenido para evitar inyecciones y luego parsear como Markdown
                 const escapedContent = content
                     .replace(/&/g, '&')
                     .replace(/</g, '<')
@@ -902,13 +1115,12 @@
                 messageDiv.innerHTML = `
                     <div class="ai-message-content">${renderedContent}</div>
                     <div class="message-buttons">
-                        <button class="copy-button" onclick="copyMessage(this)" title="Copiar">📋</button>
-                        <button class="preview-button" onclick="previewContent(this, '${contentType}')" title="Vista previa">📄</button>
-                        <button class="reply-button" onclick="replyToMessage(this)" title="Responder">↩️</button>
+                        <button class="copy-button" onclick="copyMessage(this)" title="Copiar" aria-label="Copiar mensaje"><i class="fas fa-copy"></i></button>
+                        <button class="preview-button" onclick="previewContent(this, '${contentType}')" title="Vista previa" aria-label="Ver vista previa"><i class="fas fa-eye"></i></button>
+                        <button class="reply-button" onclick="replyToMessage(this)" title="Responder" aria-label="Responder mensaje"><i class="fas fa-reply"></i></button>
                     </div>`;
             }
             chatArea.appendChild(messageDiv);
-            // Forzar el scroll al último mensaje
             chatArea.scrollTo({ top: chatArea.scrollHeight, behavior: 'smooth' });
             if (save) {
                 sessions[currentSessionId] = sessions[currentSessionId] || { name: `Sesión ${currentSessionId}`, messages: [] };
@@ -917,7 +1129,6 @@
             }
         }
 
-        // Editar mensaje
         function editMessage(messageDiv) {
             const currentText = messageDiv.textContent;
             promptInput.value = currentText;
@@ -927,14 +1138,12 @@
             promptInput.focus();
         }
 
-        // Responder a mensaje
         function replyToMessage(button) {
             const messageText = button.parentElement.previousElementSibling.textContent;
             promptInput.value = `Refiriéndote a: "${messageText.slice(0, 50)}..."\n`;
             promptInput.focus();
         }
 
-        // Indicador de escritura
         function addTypingIndicator() {
             const typingDiv = document.createElement('div');
             typingDiv.className = 'typing';
@@ -949,7 +1158,6 @@
             if (typingIndicator) typingIndicator.remove();
         }
 
-        // Enviar mensaje
         async function sendMessage() {
             const prompt = promptInput.value.trim();
             if (!prompt) return;
@@ -967,7 +1175,6 @@
                 const language = document.getElementById('language').value;
                 const styleProfile = document.getElementById('styleProfile').value || null;
 
-                // Preparar historial de mensajes
                 const messageHistory = (sessions[currentSessionId]?.messages || []).map(msg => ({
                     role: msg.isUser ? 'user' : 'assistant',
                     content: msg.content
@@ -1007,19 +1214,17 @@
             }
         }
 
-        // Copiar mensaje
         function copyMessage(button) {
             const messageContent = button.parentElement.previousElementSibling.innerText;
             navigator.clipboard.writeText(messageContent).then(() => {
-                button.textContent = '✅';
+                button.innerHTML = '<i class="fas fa-check"></i>';
                 showToast('Texto copiado');
-                setTimeout(() => button.textContent = '📋', 2000);
+                setTimeout(() => button.innerHTML = '<i class="fas fa-copy"></i>', 2000);
             }).catch(err => {
                 showToast('Error al copiar: ' + err, 'error');
             });
         }
 
-        // Vista previa de contenido
         async function previewContent(button, contentType) {
             const messageText = button.parentElement.previousElementSibling.innerText;
             const styleProfile = document.getElementById('styleProfile').value || null;
@@ -1055,7 +1260,6 @@
             }
         }
 
-        // Descargar contenido
         function downloadCurrentContent() {
             if (currentContentType === 'html') {
                 const iframe = document.querySelector('#previewContent iframe');
@@ -1089,7 +1293,6 @@
             }
         }
 
-        // Cerrar modal
         function closeModal() {
             previewModal.style.display = 'none';
             document.getElementById('previewContent').innerHTML = '';
@@ -1097,7 +1300,6 @@
             currentContentType = 'pdf';
         }
 
-        // Limpiar chat
         function clearChat() {
             if (!confirm('¿Estás seguro de que quieres limpiar el chat?')) return;
             chatArea.innerHTML = '';
@@ -1107,7 +1309,6 @@
             updateSuggestions();
         }
 
-        // Exportar chat
         function exportChat() {
             const messages = sessions[currentSessionId]?.messages || [];
             if (messages.length === 0) {
@@ -1127,45 +1328,45 @@
             showToast('Chat exportado');
         }
 
-        // Cambiar tema
         function toggleTheme() {
             const currentTheme = document.documentElement.getAttribute('data-theme');
             const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
             document.documentElement.setAttribute('data-theme', newTheme);
             localStorage.setItem('theme', newTheme);
-            document.querySelector('.theme-toggle').textContent = newTheme === 'dark' ? '☀️' : '🌙';
+            document.querySelector('.theme-toggle').innerHTML = newTheme === 'dark' ? '<i class="fas fa-sun"></i>' : '<i class="fas fa-moon"></i>';
             showToast(`Tema ${newTheme === 'dark' ? 'oscuro' : 'claro'} activado`);
         }
 
-        // Alternar sidebar
         function toggleSidebar() {
             const sidebar = document.getElementById('sidebar');
             sidebar.classList.toggle('hidden');
         }
 
-        // Subir documento
         async function uploadDocument(file) {
             if (!file) return;
             const formData = new FormData();
             formData.append('file', file);
+            uploadProgress.style.width = '10%';
             try {
                 const response = await fetch('/analyze_document', {
                     method: 'POST',
                     body: formData
                 });
+                uploadProgress.style.width = '100%';
+                setTimeout(() => uploadProgress.style.width = '0', 300);
                 const data = await response.json();
                 if (data.error) {
                     showToast(`Error: ${data.error}`, 'error');
                 } else {
-                    showToast('Documento analizado y perfil de estilo creado');
+                    showToast('✅ Documento analizado y perfil de estilo creado');
                     loadStyleProfiles();
                 }
             } catch (error) {
+                uploadProgress.style.width = '0';
                 showToast(`Error al subir: ${error.message}`, 'error');
             }
         }
 
-        // Configurar eventos para el área de subida
         uploadArea.addEventListener('click', () => fileInput.click());
         fileInput.addEventListener('change', () => {
             if (fileInput.files.length) {
@@ -1184,20 +1385,18 @@
             e.preventDefault();
             uploadArea.classList.remove('dragover');
             const file = e.dataTransfer.files[0];
-            if (file && (file.type === 'application/pdf' || file.type === 'text/plain')) {
+            if (file && ['application/pdf', 'text/plain', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'image/png', 'image/jpeg'].includes(file.type)) {
                 uploadDocument(file);
             } else {
-                showToast('Por favor, sube un archivo PDF o TXT', 'error');
+                showToast('Por favor, sube un archivo PDF, TXT, DOCX, PNG o JPG', 'error');
             }
         });
 
-        // Ajustar altura del textarea automáticamente
         promptInput.addEventListener('input', () => {
             promptInput.style.height = '60px';
             promptInput.style.height = `${promptInput.scrollHeight}px`;
         });
 
-        // Enviar mensaje con Enter
         promptInput.addEventListener('keypress', (e) => {
             if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
@@ -1205,24 +1404,20 @@
             }
         });
 
-        // Inicialización al cargar la página
         document.addEventListener('DOMContentLoaded', () => {
-            // Cargar tema guardado
             const savedTheme = localStorage.getItem('theme') || 'light';
             document.documentElement.setAttribute('data-theme', savedTheme);
-            document.querySelector('.theme-toggle').textContent = savedTheme === 'dark' ? '☀️' : '🌙';
+            document.querySelector('.theme-toggle').innerHTML = savedTheme === 'dark' ? '<i class="fas fa-sun"></i>' : '<i class="fas fa-moon"></i>';
 
-            // Cargar sesiones y perfiles de estilo
             loadSessions();
             loadStyleProfiles();
+            initSectionStates();
             updateSuggestions();
 
-            // Cargar sesión por defecto si existe
             if (sessions[currentSessionId]) {
                 loadSession(currentSessionId);
             }
 
-            // Reintentar mensajes en cola si hay conexión
             if (offlineQueue.length && navigator.onLine) {
                 offlineQueue.forEach(prompt => {
                     promptInput.value = prompt;
@@ -1231,7 +1426,6 @@
             }
         });
 
-        // Detectar cambios de conexión
         window.addEventListener('online', () => {
             if (offlineQueue.length) {
                 offlineQueue.forEach(prompt => {
