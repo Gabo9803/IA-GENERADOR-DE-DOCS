@@ -19,15 +19,20 @@ import sqlite3
 import bcrypt
 from collections import Counter
 import statistics
+import markdown
+from docx import Document
+import pytesseract
+from PIL import Image
+import hashlib
 
 app = Flask(__name__)
-app.secret_key = os.urandom(24)  # Clave secreta para sesiones
+app.secret_key = os.urandom(24)
 
 # Cargar variables de entorno
 load_dotenv()
 openai_api_key = os.getenv("OPENAI_API_KEY")
 if not openai_api_key:
-    raise ValueError("OPENAI_API_KEY no está configurada en las variables de entorno")
+    raise ValueError("OPENAI_API_KEY no está configurada")
 
 # Configurar cliente OpenAI
 client = openai.OpenAI(api_key=openai_api_key)
@@ -54,15 +59,14 @@ def load_user(user_id):
         return User(user[0], user[1])
     return None
 
-# Definir la versión actual del esquema
-CURRENT_SCHEMA_VERSION = 2
+# Versión del esquema
+CURRENT_SCHEMA_VERSION = 3
 
 def init_db():
-    """Inicializa la base de datos con las tablas necesarias."""
+    """Inicializa la base de datos."""
     conn = sqlite3.connect('profiles.db')
     cursor = conn.cursor()
     
-    # Tabla de usuarios
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -71,7 +75,6 @@ def init_db():
         )
     ''')
     
-    # Tabla para rastrear la versión del esquema
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS schema_version (
             id INTEGER PRIMARY KEY,
@@ -79,16 +82,25 @@ def init_db():
         )
     ''')
     
-    # Tabla de perfiles de estilo (estructura base)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS style_profiles (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id INTEGER NOT NULL,
-            font_name TEXT,
+            name TEXT,
+            fonts TEXT,
             font_size INTEGER,
             tone TEXT,
             margins TEXT,
             structure TEXT,
+            text_color TEXT,
+            background_color TEXT,
+            alignment TEXT,
+            line_spacing REAL,
+            document_purpose TEXT,
+            confidence_scores TEXT,
+            analysis_keywords TEXT,
+            embeddings TEXT,
+            visual_elements TEXT,
             FOREIGN KEY (user_id) REFERENCES users (id)
         )
     ''')
@@ -97,28 +109,22 @@ def init_db():
     conn.close()
 
 def migrate_db():
-    """Verifica y migra la base de datos a la versión actual."""
+    """Migra la base de datos a la versión actual."""
     conn = sqlite3.connect('profiles.db')
     cursor = conn.cursor()
     
-    # Obtener la versión actual del esquema
     cursor.execute('SELECT version FROM schema_version WHERE id = 1')
     result = cursor.fetchone()
-    if result:
-        current_version = result[0]
-    else:
-        # Si no existe, asumir versión 0 e insertar
-        current_version = 0
+    current_version = result[0] if result else 0
+    
+    if not result:
         cursor.execute('INSERT INTO schema_version (id, version) VALUES (1, ?)', (current_version,))
         conn.commit()
     
-    # Migrar desde la versión actual hasta CURRENT_SCHEMA_VERSION
     if current_version < 1:
-        # Migración a versión 1: Estructura inicial ya creada en init_db
         current_version = 1
     
     if current_version < 2:
-        # Migración a versión 2: Añadir nuevos campos a style_profiles
         cursor.execute('ALTER TABLE style_profiles ADD COLUMN text_color TEXT DEFAULT "#000000"')
         cursor.execute('ALTER TABLE style_profiles ADD COLUMN background_color TEXT DEFAULT "#FFFFFF"')
         cursor.execute('ALTER TABLE style_profiles ADD COLUMN alignment TEXT DEFAULT "left"')
@@ -127,19 +133,27 @@ def migrate_db():
         cursor.execute('ALTER TABLE style_profiles ADD COLUMN confidence_scores TEXT DEFAULT "{}"')
         current_version = 2
     
-    # Actualizar la versión del esquema
+    if current_version < 3:
+        cursor.execute('ALTER TABLE style_profiles ADD COLUMN name TEXT DEFAULT ""')
+        cursor.execute('ALTER TABLE style_profiles ADD COLUMN fonts TEXT DEFAULT "{}"')
+        cursor.execute('ALTER TABLE style_profiles ADD COLUMN analysis_keywords TEXT DEFAULT "[]"')
+        cursor.execute('ALTER TABLE style_profiles ADD COLUMN embeddings TEXT DEFAULT "[]"')
+        cursor.execute('ALTER TABLE style_profiles ADD COLUMN visual_elements TEXT DEFAULT "{}"')
+        cursor.execute('UPDATE style_profiles SET fonts = ?', (json.dumps({'normal': 'Helvetica', 'bold': 'Helvetica-Bold', 'italic': 'Helvetica-Oblique'}),))
+        current_version = 3
+    
     cursor.execute('UPDATE schema_version SET version = ? WHERE id = 1', (CURRENT_SCHEMA_VERSION,))
     conn.commit()
     conn.close()
 
-# Ejecutar la inicialización y migración de la base de datos al iniciar la aplicación
 init_db()
 migrate_db()
 
-# Cache para respuestas, sesiones y vistas previas HTML
+# Cache
 response_cache = {}
-session_messages = {}  # Almacena mensajes por sesión
-html_previews = {}  # Almacena contenido HTML temporal para vistas previas
+session_messages = {}
+html_previews = {}
+analysis_cache = {}
 
 def get_db_connection():
     conn = sqlite3.connect('profiles.db')
@@ -147,9 +161,10 @@ def get_db_connection():
     return conn
 
 def get_default_style_profile():
-    """Devuelve un estilo por defecto para la generación de documentos."""
+    """Devuelve un estilo por defecto."""
     return {
-        'font_name': 'Helvetica',
+        'name': 'Default',
+        'fonts': {'normal': 'Helvetica', 'bold': 'Helvetica-Bold', 'italic': 'Helvetica-Oblique'},
         'font_size': 12,
         'tone': 'neutral',
         'margins': {'top': 1, 'bottom': 1, 'left': 1, 'right': 1},
@@ -159,36 +174,45 @@ def get_default_style_profile():
         'alignment': 'left',
         'line_spacing': 1.33,
         'document_purpose': 'general',
-        'confidence_scores': {'font_name': 1.0, 'font_size': 1.0, 'tone': 0.8, 'margins': 1.0, 'structure': 0.8, 'text_color': 1.0, 'background_color': 1.0, 'alignment': 0.9, 'line_spacing': 0.9, 'document_purpose': 0.7}
+        'confidence_scores': {'fonts': 1.0, 'font_size': 1.0, 'tone': 0.8, 'margins': 1.0, 'structure': 0.8, 'text_color': 1.0, 'background_color': 1.0, 'alignment': 0.9, 'line_spacing': 0.9, 'document_purpose': 0.7},
+        'analysis_keywords': [],
+        'embeddings': [],
+        'visual_elements': {}
     }
 
 def parse_markdown_to_reportlab(text, style_profile=None):
     """Convierte Markdown a elementos de reportlab con soporte para estilos personalizados."""
     styles = getSampleStyleSheet()
     style_profile = style_profile or get_default_style_profile()
-    font_name = style_profile['font_name']
+    fonts = style_profile['fonts']
     font_size = style_profile['font_size']
     alignment = {'left': 0, 'center': 1, 'right': 2, 'justified': 4}.get(style_profile['alignment'], 0)
     line_spacing = style_profile['line_spacing']
     text_color = colors.HexColor(style_profile['text_color'])
     background_color = colors.HexColor(style_profile['background_color'])
     
-    # Validar la fuente
+    # Validar fuentes
     available_fonts = pdfmetrics.getRegisteredFontNames()
-    if font_name not in available_fonts:
-        print(f"Fuente no válida '{font_name}', usando 'Helvetica' como respaldo")  # Depuración
-        font_name = 'Helvetica'
-    bold_font = f'{font_name}-Bold'
-    if bold_font not in available_fonts:
-        print(f"Fuente negrita no válida '{bold_font}', usando 'Helvetica-Bold' como respaldo")  # Depuración
-        bold_font = 'Helvetica-Bold'
+    font_normal = fonts.get('normal', 'Helvetica')
+    font_bold = fonts.get('bold', 'Helvetica-Bold')
+    font_italic = fonts.get('italic', 'Helvetica-Oblique')
+    
+    if font_normal not in available_fonts:
+        print(f"Fuente normal no válida '{font_normal}', usando 'Helvetica'")
+        font_normal = 'Helvetica'
+    if font_bold not in available_fonts:
+        print(f"Fuente negrita no válida '{font_bold}', usando 'Helvetica-Bold'")
+        font_bold = 'Helvetica-Bold'
+    if font_italic not in available_fonts:
+        print(f"Fuente cursiva no válida '{font_italic}', usando 'Helvetica-Oblique'")
+        font_italic = 'Helvetica-Oblique'
     
     body_style = ParagraphStyle(
         name='Body',
         fontSize=font_size,
         leading=font_size * line_spacing,
         spaceAfter=8,
-        fontName=font_name,
+        fontName=font_normal,
         alignment=alignment,
         textColor=text_color,
         backColor=background_color
@@ -198,7 +222,17 @@ def parse_markdown_to_reportlab(text, style_profile=None):
         fontSize=font_size,
         leading=font_size * line_spacing,
         spaceAfter=8,
-        fontName=bold_font,
+        fontName=font_bold,
+        alignment=alignment,
+        textColor=text_color,
+        backColor=background_color
+    )
+    italic_style = ParagraphStyle(
+        name='Italic',
+        fontSize=font_size,
+        leading=font_size * line_spacing,
+        spaceAfter=8,
+        fontName=font_italic,
         alignment=alignment,
         textColor=text_color,
         backColor=background_color
@@ -218,7 +252,7 @@ def parse_markdown_to_reportlab(text, style_profile=None):
                 ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
                 ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
                 ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                ('FONTNAME', (0, 0), (-1, -1), font_name),
+                ('FONTNAME', (0, 0), (-1, -1), font_normal),
                 ('FONTSIZE', (0, 0), (-1, -1), font_size),
                 ('GRID', (0, 0), (-1, -1), 1, colors.black),
                 ('LEADING', (0, 0), (-1, -1), font_size * line_spacing),
@@ -232,11 +266,13 @@ def parse_markdown_to_reportlab(text, style_profile=None):
             for line in lines:
                 line = line.replace('\n', '<br />')
                 line = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', line)
+                line = re.sub(r'\*(.*?)\*', r'<i>\1</i>', line)
                 if line.strip().startswith('- '):
                     line = f'• {line[2:]}'
                     elements.append(Paragraph(line, body_style))
                 else:
-                    elements.append(Paragraph(line, bold_style if '**' in line else body_style))
+                    style = bold_style if '<b>' in line else italic_style if '<i>' in line else body_style
+                    elements.append(Paragraph(line, style))
                 elements.append(Spacer(1, 0.1 * inch))
     
     return elements
@@ -244,10 +280,11 @@ def parse_markdown_to_reportlab(text, style_profile=None):
 def analyze_document(file):
     """Analiza un documento subido para extraer estilo, formato y tipografía con mayor precisión."""
     style_profile = {
-        'font_name': 'Helvetica',
+        'name': f"Perfil - {datetime.now().strftime('%Y%m%d_%H%M%S')}",
+        'fonts': {'normal': 'Helvetica', 'bold': 'Helvetica-Bold', 'italic': 'Helvetica-Oblique'},
         'font_size': 12,
-        'margins': {'top': 1, 'bottom': 1, 'left': 1, 'right': 1},
         'tone': 'neutral',
+        'margins': {'top': 1, 'bottom': 1, 'left': 1, 'right': 1},
         'structure': [],
         'text_color': '#000000',
         'background_color': '#FFFFFF',
@@ -255,7 +292,7 @@ def analyze_document(file):
         'line_spacing': 1.33,
         'document_purpose': 'general',
         'confidence_scores': {
-            'font_name': 0.8,
+            'fonts': 0.8,
             'font_size': 0.8,
             'tone': 0.7,
             'margins': 0.8,
@@ -265,181 +302,303 @@ def analyze_document(file):
             'alignment': 0.7,
             'line_spacing': 0.7,
             'document_purpose': 0.6
-        }
+        },
+        'analysis_keywords': [],
+        'embeddings': [],
+        'visual_elements': {}
     }
     
     content = ""
-    if file.filename.endswith('.pdf'):
-        with pdfplumber.open(file) as pdf:
-            font_names = []
-            font_sizes = []
-            margins = {'top': [], 'bottom': [], 'left': [], 'right': []}
-            text_colors = []
-            alignments = []
-            line_spacings = []
-            structures = set()
-            
-            for page in pdf.pages:
-                # Extraer texto
-                content += page.extract_text() or ""
+    try:
+        # Calcular hash del archivo para caché
+        file.seek(0)
+        file_hash = hashlib.md5(file.read()).hexdigest()
+        file.seek(0)
+        if file_hash in analysis_cache:
+            return analysis_cache[file_hash]
+        
+        if file.filename.endswith('.pdf'):
+            with pdfplumber.open(file) as pdf:
+                font_names = []
+                font_styles = []
+                font_sizes = []
+                margins = {'top': [], 'bottom': [], 'left': [], 'right': []}
+                text_colors = []
+                background_colors = []
+                alignments = []
+                line_spacings = []
+                structures = set()
+                heading_levels = []
+                visual_elements = {'images': 0, 'tables': 0}
                 
-                # Analizar caracteres para fuentes, tamaños y colores
-                chars = page.chars
-                if chars:
-                    raw_fonts = [char.get('fontname', 'Helvetica').split('-')[0] for char in chars]
-                    # Limpiar nombres de fuente malformados
-                    cleaned_fonts = [re.sub(r'^[^a-zA-Z]+', '', f).lower() for f in raw_fonts]
-                    font_names.extend(cleaned_fonts)
-                    font_sizes.extend([round(char.get('size', 12)) for char in chars])
-                    text_colors.extend([char.get('non_stroking_color', (0, 0, 0)) for char in chars])
-                
-                # Calcular márgenes
-                if page.chars:
-                    margins['top'].append(page.bbox[3] - max(c['y1'] for c in page.chars))
-                    margins['bottom'].append(min(c['y0'] for c in page.chars) - page.bbox[1])
-                    margins['left'].append(min(c['x0'] for c in page.chars) - page.bbox[0])
-                    margins['right'].append(page.bbox[2] - max(c['x1'] for c in page.chars))
-                
-                # Detectar alineación y espaciado
-                if page.extract_text():
-                    lines = page.extract_text().split('\n')
-                    for i in range(len(lines)-1):
-                        try:
-                            y0 = page.chars[i]['y0']
-                            y1 = page.chars[i+1]['y0']
-                            spacing = (y0 - y1) / page.chars[i].get('size', 12)
-                            if spacing > 0:
-                                line_spacings.append(spacing)
-                        except IndexError:
-                            continue
+                max_pages = 5
+                for page in pdf.pages[:min(len(pdf.pages), max_pages)]:
+                    # Extraer texto
+                    content += page.extract_text() or ""
                     
-                    # Estimar alineación basada en posiciones x
-                    x_positions = [c['x0'] for c in page.chars]
-                    if x_positions:
-                        x_variance = statistics.variance(x_positions) if len(x_positions) > 1 else 0
-                        if x_variance < 10:
-                            alignments.append('justified' if max(x_positions) - min(x_positions) > page.width * 0.8 else 'left')
-                        elif max(x_positions) > page.width * 0.9:
-                            alignments.append('right')
-                        elif abs(max(x_positions) + min(x_positions) - page.width) < page.width * 0.1:
-                            alignments.append('center')
+                    # Analizar fuentes incrustadas
+                    for font in page.fonts:
+                        font_name = font.get('BaseFont', 'Helvetica').split('-')[0]
+                        cleaned_name = re.sub(r'^[^a-zA-Z]+', '', font_name).lower()
+                        if font.get('FontFile'):
+                            try:
+                                font_data = font['FontFile'].stream
+                                pdfmetrics.registerFont(TTFont(cleaned_name, BytesIO(font_data)))
+                                print(f"Registrada fuente personalizada: {cleaned_name}")
+                            except Exception as e:
+                                print(f"Error al registrar fuente {cleaned_name}: {e}")
+                        font_names.append(cleaned_name)
+                        font_styles.append(font.get('BaseFont', ''))
+                    
+                    # Analizar caracteres
+                    chars = page.chars
+                    if chars:
+                        raw_fonts = [char.get('fontname', 'Helvetica') for char in chars]
+                        cleaned_fonts = [re.sub(r'^[^a-zA-Z]+', '', f).lower() for f in raw_fonts]
+                        font_names.extend(cleaned_fonts)
+                        font_sizes.extend([round(char.get('size', 12)) for char in chars])
+                        text_colors.extend([char.get('non_stroking_color', (0, 0, 0)) for char in chars])
+                    
+                    # Calcular márgenes
+                    if page.chars:
+                        margins['top'].append(page.bbox[3] - max(c['y1'] for c in page.chars))
+                        margins['bottom'].append(min(c['y0'] for c in page.chars) - page.bbox[1])
+                        margins['left'].append(min(c['x0'] for c in page.chars) - page.bbox[0])
+                        margins['right'].append(page.bbox[2] - max(c['x1'] for c in page.chars))
+                    
+                    # Detectar alineación y espaciado
+                    if page.extract_text():
+                        lines = page.extract_text().split('\n')
+                        paragraph_spacings = []
+                        for i in range(len(lines)-1):
+                            try:
+                                y0 = page.chars[i]['y0']
+                                y1 = page.chars[i+1]['y0']
+                                spacing = (y0 - y1) / page.chars[i].get('size', 12)
+                                if spacing > 0 and not lines[i].strip().startswith(('-', '#', '|')):
+                                    paragraph_spacings.append(spacing)
+                            except IndexError:
+                                continue
+                        if paragraph_spacings:
+                            line_spacings.append(statistics.mode(paragraph_spacings))
+                        
+                        x_positions = [c['x0'] for c in page.chars]
+                        if x_positions:
+                            x_variance = statistics.variance(x_positions) if len(x_positions) > 1 else 0
+                            if x_variance < 10:
+                                alignments.append('justified' if max(x_positions) - min(x_positions) > page.width * 0.8 else 'left')
+                            elif max(x_positions) > page.width * 0.9:
+                                alignments.append('right')
+                            elif abs(max(x_positions) + min(x_positions) - page.width) < page.width * 0.1:
+                                alignments.append('center')
+                    
+                    # Detectar estructuras avanzadas
+                    avg_size = statistics.mean(font_sizes) if font_sizes else 12
+                    for char in page.chars:
+                        size = char.get('size', 12)
+                        if size > avg_size * 1.2:
+                            heading_levels.append({'size': size, 'text': char['text']})
+                    if page.extract_tables():
+                        structures.add('tables')
+                        visual_elements['tables'] += len(page.extract_tables())
+                    if page.extract_text():
+                        text = page.extract_text()
+                        if re.search(r'^\s*[\•\-\*]\s+', text, re.MULTILINE):
+                            structures.add('lists')
+                        if re.search(r'^\s*[A-Z].*\n[-=]+', text, re.MULTILINE):
+                            structures.add('headings')
+                        if re.search(r'\n\n+', text):
+                            structures.add('paragraphs')
+                        if any(line.strip().startswith('>') for line in text.split('\n')):
+                            structures.add('blockquotes')
+                        if any(re.match(r'^\d+\.\s+', line) for line in text.split('\n')[-5:]):
+                            structures.add('footnotes')
+                    if page.images:
+                        visual_elements['images'] += len(page.images)
                 
-                # Detectar estructuras
-                if page.extract_tables():
-                    structures.add('tables')
-                if page.extract_text():
-                    text = page.extract_text()
-                    if re.search(r'^\s*[-*]\s+', text, re.MULTILINE):
-                        structures.add('lists')
-                    if re.search(r'^(#+)\s+', text, re.MULTILINE):
-                        structures.add('headings')
-                    if re.search(r'\n\n+', text):
-                        structures.add('paragraphs')
-            
-            # Normalizar y calcular valores dominantes
-            if font_names:
-                font_counter = Counter(font_names)
-                raw_font = font_counter.most_common(1)[0][0]
-                print(f"Fuente detectada: {raw_font}")  # Depuración
+                # Normalizar valores
+                if font_names:
+                    font_counter = Counter(font_names)
+                    raw_font = font_counter.most_common(1)[0][0]
+                    print(f"Fuente detectada: {raw_font}")
+                    font_mapping = {
+                        'timesnewroman': 'Times-Roman',
+                        'times new roman': 'Times-Roman',
+                        'arial': 'Helvetica',
+                        'arialm': 'Helvetica',
+                        'helvetica': 'Helvetica',
+                        'couriernew': 'Courier',
+                        'courier new': 'Courier',
+                        '': 'Helvetica'
+                    }
+                    style_profile['fonts']['normal'] = font_mapping.get(raw_font.lower(), 'Helvetica')
+                    # Detectar variaciones
+                    for style in font_styles:
+                        if 'Bold' in style:
+                            style_profile['fonts']['bold'] = font_mapping.get(raw_font.lower(), 'Helvetica') + '-Bold'
+                        if 'Italic' in style or 'Oblique' in style:
+                            style_profile['fonts']['italic'] = font_mapping.get(raw_font.lower(), 'Helvetica') + '-Oblique'
+                    style_profile['confidence_scores']['fonts'] = font_counter.most_common(1)[0][1] / len(font_names)
+                    print(f"Fuentes normalizadas: {style_profile['fonts']}")
                 
-                # Mapeo de fuentes a las soportadas por ReportLab
-                font_mapping = {
-                    'timesnewroman': 'Times-Roman',
-                    'times new roman': 'Times-Roman',
-                    'arial': 'Helvetica',
-                    'arialm': 'Helvetica',  # Manejar 'arialm' específicamente
-                    'helvetica': 'Helvetica',
-                    'couriernew': 'Courier',
-                    'courier new': 'Courier',
-                    '': 'Helvetica'  # Manejar nombres vacíos o malformados
-                }
-                # Normalizar el nombre de la fuente
-                normalized_font = font_mapping.get(raw_font.lower(), 'Helvetica')
-                style_profile['font_name'] = normalized_font
-                style_profile['confidence_scores']['font_name'] = font_counter.most_common(1)[0][1] / len(font_names)
-                print(f"Fuente normalizada: {style_profile['font_name']}")  # Depuración
-            
-            if font_sizes:
-                size_counter = Counter(font_sizes)
-                style_profile['font_size'] = size_counter.most_common(1)[0][0]
-                style_profile['confidence_scores']['font_size'] = size_counter.most_common(1)[0][1] / len(font_sizes)
-            
-            if margins['top']:
-                for key in margins:
-                    style_profile['margins'][key] = statistics.mean(margins[key]) / 72  # Convertir a pulgadas
-                    style_profile['confidence_scores']['margins'] = min(1.0, len(margins[key]) / len(pdf.pages))
-            
-            if text_colors:
-                color_counter = Counter([tuple(c) if isinstance(c, (list, tuple)) else c for c in text_colors])
-                dominant_color = color_counter.most_common(1)[0][0]
-                if isinstance(dominant_color, (list, tuple)):
-                    style_profile['text_color'] = '#{:02x}{:02x}{:02x}'.format(
-                        int(dominant_color[0] * 255), int(dominant_color[1] * 255), int(dominant_color[2] * 255)
+                if not font_names:
+                    style_profile['fonts'] = {'normal': 'Helvetica', 'bold': 'Helvetica-Bold', 'italic': 'Helvetica-Oblique'}
+                    style_profile['confidence_scores']['fonts'] = 0.5
+                    print("No se detectaron fuentes, usando fuentes por defecto")
+                
+                if font_sizes:
+                    size_counter = Counter(font_sizes)
+                    style_profile['font_size'] = size_counter.most_common(1)[0][0]
+                    style_profile['confidence_scores']['font_size'] = size_counter.most_common(1)[0][1] / len(font_sizes)
+                
+                if margins['top']:
+                    margin_values = {key: Counter([round(v/72, 2) for v in margins[key]]) for key in margins}
+                    for key in margins:
+                        style_profile['margins'][key] = margin_values[key].most_common(1)[0][0]
+                        style_profile['confidence_scores']['margins'] = min(1.0, len(margins[key]) / len(pdf.pages))
+                
+                if text_colors:
+                    color_counter = Counter([tuple(c) if isinstance(c, (list, tuple)) else c for c in text_colors])
+                    dominant_color = color_counter.most_common(1)[0][0]
+                    if isinstance(dominant_color, (list, tuple)):
+                        style_profile['text_color'] = '#{:02x}{:02x}{:02x}'.format(
+                            int(dominant_color[0] * 255), int(dominant_color[1] * 255), int(dominant_color[2] * 255)
+                        )
+                    style_profile['confidence_scores']['text_color'] = color_counter.most_common(1)[0][1] / len(text_colors)
+                
+                if background_colors:
+                    bg_counter = Counter(background_colors)
+                    dominant_bg = bg_counter.most_common(1)[0][0]
+                    style_profile['background_color'] = '#{:02x}{:02x}{:02x}'.format(
+                        int(dominant_bg[0] * 255), int(dominant_bg[1] * 255), int(dominant_bg[2] * 255)
                     )
-                style_profile['confidence_scores']['text_color'] = color_counter.most_common(1)[0][1] / len(text_colors)
-            
-            if alignments:
-                alignment_counter = Counter(alignments)
-                style_profile['alignment'] = alignment_counter.most_common(1)[0][0]
-                style_profile['confidence_scores']['alignment'] = alignment_counter.most_common(1)[0][1] / len(alignments)
-            
-            if line_spacings:
-                style_profile['line_spacing'] = min(max(statistics.mean(line_spacings), 1.0), 2.0)
-                style_profile['confidence_scores']['line_spacing'] = len(line_spacings) / len(pdf.pages)
-            
+                    style_profile['confidence_scores']['background_color'] = bg_counter.most_common(1)[0][1] / len(background_colors)
+                
+                if alignments:
+                    alignment_counter = Counter(alignments)
+                    style_profile['alignment'] = alignment_counter.most_common(1)[0][0]
+                    style_profile['confidence_scores']['alignment'] = alignment_counter.most_common(1)[0][1] / len(alignments)
+                
+                if line_spacings:
+                    style_profile['line_spacing'] = min(max(statistics.mean(line_spacings), 1.0), 2.0)
+                    style_profile['confidence_scores']['line_spacing'] = len(line_spacings) / len(pdf.pages)
+                
+                if heading_levels:
+                    unique_sizes = sorted(set(h['size'] for h in heading_levels), reverse=True)
+                    style_profile['structure'].append({'headings': len(unique_sizes)})
+                
+                style_profile['structure'] = list(structures)
+                style_profile['confidence_scores']['structure'] = 0.9 if structures else 0.7
+                style_profile['visual_elements'] = visual_elements
+        
+        elif file.filename.endswith('.txt'):
+            content = file.read().decode('utf-8', errors='ignore')
+            md = markdown.Markdown()
+            parsed = md.parse(content)
+            structures = set()
+            if any(tag.startswith('h') for tag in parsed):
+                structures.add('headings')
+            if 'ul' in parsed or 'ol' in parsed:
+                structures.add('lists')
+            if re.search(r'^\s*\|.*\|\s*$', content, re.MULTILINE):
+                structures.add('tables')
+            if re.search(r'^>\s+', content, re.MULTILINE):
+                structures.add('blockquotes')
+            if '```' in content:
+                style_profile['fonts']['normal'] = 'Courier'
+                style_profile['confidence_scores']['fonts'] = 0.7
             style_profile['structure'] = list(structures)
-            style_profile['confidence_scores']['structure'] = 0.9 if structures else 0.7
-            
-            # Asumir fondo blanco (PDFs no siempre proporcionan esta información)
-            style_profile['background_color'] = '#FFFFFF'
-            style_profile['confidence_scores']['background_color'] = 0.9
+            style_profile['confidence_scores']['structure'] = 0.8 if structures else 0.6
         
-    elif file.filename.endswith('.txt'):
-        content = file.read().decode('utf-8', errors='ignore')
-        structures = set()
+        elif file.filename.endswith('.docx'):
+            doc = Document(file)
+            content = '\n'.join(p.text for p in doc.paragraphs)
+            structures = set(['paragraphs'])
+            for p in doc.paragraphs:
+                if p.style.name.startswith('Heading'):
+                    structures.add('headings')
+                if p.style.name == 'List Bullet' or p.style.name == 'List Number':
+                    structures.add('lists')
+            if doc.tables:
+                structures.add('tables')
+            style_profile['structure'] = list(structures)
+            style_profile['confidence_scores']['structure'] = 0.8 if structures else 0.6
+            style_profile['visual_elements'] = {'tables': len(doc.tables)}
         
-        # Detectar estructuras en TXT
-        if re.search(r'^\s*[-*]\s+', content, re.MULTILINE):
-            structures.add('lists')
-        if re.search(r'^\s*[A-Z].*\n[-=]+', content, re.MULTILINE):
-            structures.add('headings')
-        if re.search(r'\n\n+', content):
-            structures.add('paragraphs')
-        if re.search(r'^\s*\|.*\|\s*$', content, re.MULTILINE):
-            structures.add('tables')
+        elif file.filename.endswith(('.png', '.jpg', '.jpeg')):
+            content = pytesseract.image_to_string(Image.open(file))
+            structures = set(['paragraphs'])
+            if re.search(r'^\s*[\•\-\*]\s+', content, re.MULTILINE):
+                structures.add('lists')
+            if re.search(r'^\s*[A-Z].*\n[-=]+', content, re.MULTILINE):
+                structures.add('headings')
+            style_profile['structure'] = list(structures)
+            style_profile['confidence_scores']['structure'] = 0.7
+            style_profile['visual_elements'] = {'images': 1}
         
-        style_profile['structure'] = list(structures)
-        style_profile['confidence_scores']['structure'] = 0.8 if structures else 0.6
+        # Analizar tono y propósito
+        if content.strip():
+            try:
+                response = client.chat.completions.create(
+                    model="gpt-4o",
+                    messages=[
+                        {
+                            "role": "system",
+                            "content": """
+                            Analiza el texto y devuelve un JSON con:
+                            - 'tone': tono (e.g., formal, informal, técnico, académico).
+                            - 'document_purpose': propósito (e.g., informe, carta, manual, acta, propuesta).
+                            - 'confidence': confianza (0.0 a 1.0).
+                            - 'keywords': palabras clave del análisis.
+                            """
+                        },
+                        {"role": "user", "content": content[:4000]}
+                    ],
+                    max_tokens=500
+                )
+                analysis = json.loads(response.choices[0].message.content)
+                style_profile['tone'] = analysis.get('tone', 'neutral')
+                style_profile['document_purpose'] = analysis.get('document_purpose', 'general')
+                style_profile['confidence_scores']['tone'] = analysis.get('confidence', 0.7)
+                style_profile['confidence_scores']['document_purpose'] = analysis.get('confidence', 0.7)
+                style_profile['analysis_keywords'] = analysis.get('keywords', [])
+            except Exception as e:
+                print(f"Error en análisis de tono: {e}")
+                # Reglas de respaldo
+                if 'acta de reunión' in content.lower():
+                    style_profile['document_purpose'] = 'acta'
+                    style_profile['confidence_scores']['document_purpose'] = 0.8
+                elif re.search(r'^\s*Objetivo[s]?:', content, re.MULTILINE):
+                    style_profile['document_purpose'] = 'propuesta'
+                    style_profile['confidence_scores']['document_purpose'] = 0.8
+                formal_keywords = ['estimado', 'cordialmente', 'respecto']
+                technical_keywords = ['implementación', 'arquitectura', 'sistema']
+                if any(kw in content.lower() for kw in formal_keywords):
+                    style_profile['tone'] = 'formal'
+                    style_profile['confidence_scores']['tone'] = 0.7
+                elif any(kw in content.lower() for kw in technical_keywords):
+                    style_profile['tone'] = 'technical'
+                    style_profile['confidence_scores']['tone'] = 0.7
+        else:
+            style_profile['tone'] = 'neutral'
+            style_profile['document_purpose'] = 'general'
+            style_profile['confidence_scores']['tone'] = 0.5
+            style_profile['confidence_scores']['document_purpose'] = 0.5
+        
+        # Generar embeddings
+        if content.strip():
+            try:
+                embedding = client.embeddings.create(input=content[:4000], model="text-embedding-ada-002").data[0].embedding
+                style_profile['embeddings'] = embedding[:100]  # Limitar tamaño
+            except Exception as e:
+                print(f"Error al generar embeddings: {e}")
+        
+        analysis_cache[file_hash] = (style_profile, content)
+        return style_profile, content
     
-    # Analizar tono y propósito con OpenAI
-    if content:
-        try:
-            response = client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[
-                    {
-                        "role": "system",
-                        "content": """
-                        Analiza el texto proporcionado y devuelve un JSON con:
-                        - 'tone': tono del texto (e.g., formal, informal, técnico, académico, persuasivo, narrativo).
-                        - 'document_purpose': propósito del documento (e.g., informe, carta, manual, artículo, presentación).
-                        - 'confidence': confianza en la predicción (0.0 a 1.0).
-                        Usa el contexto y vocabulario para determinar el tono y propósito.
-                        """
-                    },
-                    {"role": "user", "content": content[:4000]}
-                ],
-                max_tokens=500
-            )
-            analysis = json.loads(response.choices[0].message.content)
-            style_profile['tone'] = analysis.get('tone', 'neutral')
-            style_profile['document_purpose'] = analysis.get('document_purpose', 'general')
-            style_profile['confidence_scores']['tone'] = analysis.get('confidence', 0.7)
-            style_profile['confidence_scores']['document_purpose'] = analysis.get('confidence', 0.7)
-        except Exception as e:
-            print(f"Error en análisis de tono: {e}")
-    
-    return style_profile, content
+    except Exception as e:
+        print(f"Error al analizar documento: {e}")
+        return get_default_style_profile(), ""
 
 @app.route('/')
 @login_required
@@ -527,17 +686,13 @@ def generate_document():
             session_messages[session_id] = []
 
         style_profile = get_style_profile(style_profile_id)
-        print("style_profile en /generate:", style_profile)  # Depuración
+        print("style_profile en /generate:", style_profile)
 
-        # Usar el tono y la estructura del style_profile si están disponibles
         effective_tone = style_profile['tone'] if style_profile.get('tone') else tone
         structure = style_profile['structure'] if style_profile.get('structure') else ['paragraphs']
-        structure_instruction = f"Usa una estructura que incluya: {', '.join(structure)} (e.g., headings, lists, paragraphs)."
+        structure_instruction = f"Usa una estructura que incluya: {', '.join([s if isinstance(s, str) else f'headings ({s.get('headings')} niveles)' for s in structure])}."
 
-        # Detectar si el prompt requiere una explicación estructurada
         is_explanatory = re.search(r'^(¿Quién es|¿Qué es|explicar|detallar)\b', prompt, re.IGNORECASE) is not None
-        
-        # Detectar si el prompt solicita HTML
         is_html = doc_type == 'html' or re.search(r'\b(html|página web|sitio web)\b', prompt, re.IGNORECASE) is not None
         
         if is_explanatory:
@@ -634,7 +789,8 @@ def get_style_profile(profile_id):
     conn.close()
     if profile:
         return {
-            'font_name': profile['font_name'],
+            'name': profile['name'],
+            'fonts': json.loads(profile['fonts']),
             'font_size': profile['font_size'],
             'tone': profile['tone'],
             'margins': json.loads(profile['margins']),
@@ -644,7 +800,10 @@ def get_style_profile(profile_id):
             'alignment': profile['alignment'],
             'line_spacing': profile['line_spacing'],
             'document_purpose': profile['document_purpose'],
-            'confidence_scores': json.loads(profile['confidence_scores'])
+            'confidence_scores': json.loads(profile['confidence_scores']),
+            'analysis_keywords': json.loads(profile['analysis_keywords']),
+            'embeddings': json.loads(profile['embeddings']),
+            'visual_elements': json.loads(profile['visual_elements'])
         }
     return get_default_style_profile()
 
@@ -664,7 +823,6 @@ def generate_preview():
             html_previews[preview_id] = content
             return jsonify({'preview_id': preview_id, 'content_type': 'html'})
         
-        # Generar PDF
         buffer = BytesIO()
         doc = SimpleDocTemplate(
             buffer, 
@@ -685,7 +843,7 @@ def generate_preview():
         story.append(Spacer(1, 0.3 * inch))
         
         style_profile = get_style_profile(style_profile_id)
-        print("Aplicando style_profile en generate_preview:", style_profile)  # Depuración
+        print("Aplicando style_profile en generate_preview:", style_profile)
         story.extend(parse_markdown_to_reportlab(content, style_profile))
         
         doc.build(story)
@@ -702,7 +860,6 @@ def generate_preview():
 @app.route('/preview_html/<preview_id>', methods=['GET'])
 @login_required
 def preview_html(preview_id):
-    """Sirve el contenido HTML para la vista previa."""
     if preview_id in html_previews and preview_id.startswith(f"{current_user.id}:"):
         return Response(html_previews[preview_id], mimetype='text/html')
     return jsonify({'error': 'Vista previa no encontrada'}), 404
@@ -715,8 +872,8 @@ def analyze_document_endpoint():
             return jsonify({'error': 'No se proporcionó ningún archivo'}), 400
         
         file = request.files['file']
-        if not (file.filename.endswith('.pdf') or file.filename.endswith('.txt')):
-            return jsonify({'error': 'Formato no soportado. Usa PDF o TXT.'}), 400
+        if not (file.filename.endswith(('.pdf', '.txt', '.docx', '.png', '.jpg', '.jpeg'))):
+            return jsonify({'error': 'Formato no soportado. Usa PDF, TXT, DOCX, PNG o JPG.'}), 400
         
         style_profile, content = analyze_document(file)
         
@@ -724,12 +881,15 @@ def analyze_document_endpoint():
         cursor = conn.cursor()
         cursor.execute('''
             INSERT INTO style_profiles (
-                user_id, font_name, font_size, tone, margins, structure, 
-                text_color, background_color, alignment, line_spacing, document_purpose, confidence_scores
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                user_id, name, fonts, font_size, tone, margins, structure, 
+                text_color, background_color, alignment, line_spacing, 
+                document_purpose, confidence_scores, analysis_keywords, 
+                embeddings, visual_elements
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ''', (
             current_user.id,
-            style_profile['font_name'],
+            style_profile['name'],
+            json.dumps(style_profile['fonts']),
             style_profile['font_size'],
             style_profile['tone'],
             json.dumps(style_profile['margins']),
@@ -739,16 +899,32 @@ def analyze_document_endpoint():
             style_profile['alignment'],
             style_profile['line_spacing'],
             style_profile['document_purpose'],
-            json.dumps(style_profile['confidence_scores'])
+            json.dumps(style_profile['confidence_scores']),
+            json.dumps(style_profile['analysis_keywords']),
+            json.dumps(style_profile['embeddings']),
+            json.dumps(style_profile['visual_elements'])
         ))
         profile_id = cursor.lastrowid
         conn.commit()
         conn.close()
         
+        summary = {
+            'content_preview': content[:500],
+            'word_count': len(content.split()),
+            'page_count': getattr(analyze_document, 'page_count', 1),
+            'detected_structures': style_profile['structure'],
+            'tone_analysis': {
+                'tone': style_profile['tone'],
+                'confidence': style_profile['confidence_scores']['tone'],
+                'keywords': style_profile['analysis_keywords']
+            },
+            'visual_elements': style_profile['visual_elements']
+        }
+        
         return jsonify({
             'style_profile_id': str(profile_id),
             'style_profile': style_profile,
-            'content_summary': content[:500]
+            'summary': summary
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -765,7 +941,8 @@ def get_style_profiles():
     result = {}
     for profile in profiles:
         result[str(profile['id'])] = {
-            'font_name': profile['font_name'],
+            'name': profile['name'],
+            'fonts': json.loads(profile['fonts']),
             'font_size': profile['font_size'],
             'tone': profile['tone'],
             'margins': json.loads(profile['margins']),
@@ -775,7 +952,10 @@ def get_style_profiles():
             'alignment': profile['alignment'],
             'line_spacing': profile['line_spacing'],
             'document_purpose': profile['document_purpose'],
-            'confidence_scores': json.loads(profile['confidence_scores'])
+            'confidence_scores': json.loads(profile['confidence_scores']),
+            'analysis_keywords': json.loads(profile['analysis_keywords']),
+            'embeddings': json.loads(profile['embeddings']),
+            'visual_elements': json.loads(profile['visual_elements'])
         }
     
     return jsonify(result)
@@ -796,7 +976,6 @@ def delete_style_profile(profile_id):
 @app.route('/purge_style_profiles', methods=['DELETE'])
 @login_required
 def purge_style_profiles():
-    """Elimina todos los perfiles de estilo del usuario autenticado."""
     try:
         conn = get_db_connection()
         cursor = conn.cursor()
