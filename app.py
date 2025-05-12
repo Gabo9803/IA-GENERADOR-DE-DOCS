@@ -21,9 +21,16 @@ from collections import Counter
 import statistics
 import hashlib
 import markdown2
-from docx import Document
 import pytesseract
 from PIL import Image
+
+# Manejo opcional de python-docx
+try:
+    from docx import Document
+    DOCX_AVAILABLE = True
+except ImportError:
+    DOCX_AVAILABLE = False
+    Document = None
 
 app = Flask(__name__)
 app.secret_key = os.urandom(24)
@@ -110,32 +117,62 @@ def init_db():
 def migrate_db():
     conn = sqlite3.connect('profiles.db')
     cursor = conn.cursor()
+    print("Iniciando migración de la base de datos")
     
+    # Obtener la versión actual del esquema
     cursor.execute('SELECT version FROM schema_version WHERE id = 1')
     result = cursor.fetchone()
     current_version = result[0] if result else 0
+    print(f"Versión actual del esquema: {current_version}")
     
+    # Obtener columnas existentes en style_profiles
+    cursor.execute('PRAGMA table_info(style_profiles)')
+    existing_columns = {row[1] for row in cursor.fetchall()}
+    print(f"Columnas existentes: {existing_columns}")
+    
+    # Migración a versión 1 (si es necesario)
     if current_version < 1:
         current_version = 1
     
+    # Migración a versión 2
     if current_version < 2:
-        cursor.execute('ALTER TABLE style_profiles ADD COLUMN text_color TEXT DEFAULT "#000000"')
-        cursor.execute('ALTER TABLE style_profiles ADD COLUMN background_color TEXT DEFAULT "#FFFFFF"')
-        cursor.execute('ALTER TABLE style_profiles ADD COLUMN alignment TEXT DEFAULT "left"')
-        cursor.execute('ALTER TABLE style_profiles ADD COLUMN line_spacing REAL DEFAULT 1.33')
-        cursor.execute('ALTER TABLE style_profiles ADD COLUMN document_purpose TEXT DEFAULT "general"')
-        cursor.execute('ALTER TABLE style_profiles ADD COLUMN confidence_scores TEXT DEFAULT "{}"')
+        columns_to_add = [
+            ('text_color', 'TEXT DEFAULT "#000000"'),
+            ('background_color', 'TEXT DEFAULT "#FFFFFF"'),
+            ('alignment', 'TEXT DEFAULT "left"'),
+            ('line_spacing', 'REAL DEFAULT 1.33'),
+            ('document_purpose', 'TEXT DEFAULT "general"'),
+            ('confidence_scores', 'TEXT DEFAULT "{}"')
+        ]
+        for column_name, column_def in columns_to_add:
+            if column_name not in existing_columns:
+                print(f"Añadiendo columna {column_name}")
+                cursor.execute(f'ALTER TABLE style_profiles ADD COLUMN {column_name} {column_def}')
+                existing_columns.add(column_name)
         current_version = 2
     
+    # Migración a versión 3
     if current_version < 3:
-        cursor.execute('ALTER TABLE style_profiles ADD COLUMN name TEXT DEFAULT ""')
-        cursor.execute('ALTER TABLE style_profiles ADD COLUMN fonts TEXT DEFAULT "{}"')
-        cursor.execute('ALTER TABLE style_profiles ADD COLUMN secondary_colors TEXT DEFAULT "[]"')
-        cursor.execute('ALTER TABLE style_profiles ADD COLUMN analysis_keywords TEXT DEFAULT "[]"')
-        cursor.execute('ALTER TABLE style_profiles ADD COLUMN embedding TEXT DEFAULT "[]"')
-        cursor.execute('UPDATE style_profiles SET fonts = ?', (json.dumps({'normal': 'Helvetica', 'bold': 'Helvetica-Bold', 'italic': 'Helvetica-Oblique'}),))
+        columns_to_add = [
+            ('name', 'TEXT DEFAULT ""'),
+            ('fonts', 'TEXT DEFAULT "{}"'),
+            ('secondary_colors', 'TEXT DEFAULT "[]"'),
+            ('analysis_keywords', 'TEXT DEFAULT "[]"'),
+            ('embedding', 'TEXT DEFAULT "[]"')
+        ]
+        for column_name, column_def in columns_to_add:
+            if column_name not in existing_columns:
+                print(f"Añadiendo columna {column_name}")
+                cursor.execute(f'ALTER TABLE style_profiles ADD COLUMN {column_name} {column_def}')
+                existing_columns.add(column_name)
+        
+        # Actualizar fonts para registros existentes
+        default_fonts = json.dumps({'normal': 'Helvetica', 'bold': 'Helvetica-Bold', 'italic': 'Helvetica-Oblique'})
+        cursor.execute('UPDATE style_profiles SET fonts = ? WHERE fonts = ? OR fonts IS NULL', (default_fonts, '{}'))
         current_version = 3
     
+    # Actualizar la versión del esquema
+    print(f"Migración completada. Nueva versión: {CURRENT_SCHEMA_VERSION}")
     cursor.execute('INSERT OR REPLACE INTO schema_version (id, version) VALUES (1, ?)', (CURRENT_SCHEMA_VERSION,))
     conn.commit()
     conn.close()
@@ -516,6 +553,8 @@ def analyze_document(file, custom_profile_name=None):
             style_profile['confidence_scores']['structure'] = 0.8 if structures else 0.6
         
         elif file.filename.endswith('.docx'):
+            if not DOCX_AVAILABLE:
+                raise ValueError("Soporte para DOCX no disponible (python-docx no instalado)")
             doc = Document(file)
             content = '\n'.join(p.text for p in doc.paragraphs)
             structures = set()
@@ -915,8 +954,11 @@ def analyze_document_endpoint():
         
         file = request.files['file']
         custom_profile_name = request.form.get('profile_name', None)
-        if not (file.filename.endswith(('.pdf', '.txt', '.docx', '.png', '.jpg', '.jpeg'))):
-            return jsonify({'error': 'Formato no soportado. Usa PDF, TXT, DOCX o imágenes.'}), 400
+        supported_formats = ['.pdf', '.txt', '.png', '.jpg', '.jpeg']
+        if DOCX_AVAILABLE:
+            supported_formats.append('.docx')
+        if not any(file.filename.endswith(fmt) for fmt in supported_formats):
+            return jsonify({'error': f"Formato no soportado. Usa {', '.join(supported_formats)}."}), 400
         
         style_profile, content, summary = analyze_document(file, custom_profile_name)
         
